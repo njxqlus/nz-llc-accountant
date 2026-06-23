@@ -1,10 +1,47 @@
 export const APP_TIMEZONE = "Pacific/Auckland";
 export const GST_RATE = 0.15;
-export const GST_REGISTRATION_START_DATE = "2025-07-07";
-export const GST_FREQUENCY = "TWO_MONTHLY";
-export const GST_PERIOD_ENDING_MONTHS = "ODD";
 export const GST_RETURN_INCOME = 0;
 export const TEMPORARY_ASSET_TTL_SECONDS = 24 * 60 * 60;
+
+export const GST_FILING_FREQUENCIES = [
+	"MONTHLY",
+	"TWO_MONTHLY",
+	"SIX_MONTHLY",
+] as const;
+
+export const GST_TWO_MONTHLY_PERIODS = ["ODD", "EVEN"] as const;
+
+export const GST_SIX_MONTHLY_PERIODS = [
+	"JAN_JUL",
+	"FEB_AUG",
+	"MAR_SEP",
+	"APR_OCT",
+	"MAY_NOV",
+	"JUN_DEC",
+] as const;
+
+export const GST_FILING_PERIODS = [
+	...GST_TWO_MONTHLY_PERIODS,
+	...GST_SIX_MONTHLY_PERIODS,
+] as const;
+
+export type GstFilingFrequency = (typeof GST_FILING_FREQUENCIES)[number];
+export type GstTwoMonthlyPeriod = (typeof GST_TWO_MONTHLY_PERIODS)[number];
+export type GstSixMonthlyPeriod = (typeof GST_SIX_MONTHLY_PERIODS)[number];
+export type GstFilingPeriod = (typeof GST_FILING_PERIODS)[number];
+
+export type GstSettings = {
+	registrationStartDate: string;
+	filingFrequency: GstFilingFrequency;
+	filingPeriod: GstFilingPeriod | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type SaveGstSettingsResponse = {
+	settings: GstSettings;
+	resetFilings: boolean;
+};
 
 export type Expense = {
 	id: string;
@@ -60,6 +97,17 @@ export type ApiError = {
 export type UploadExpensesResponse = {
 	expenses: Expense[];
 	failed: { fileName: string; error: string }[];
+};
+
+const GST_FILING_PERIOD_END_MONTHS: Record<GstFilingPeriod, number[]> = {
+	ODD: [1, 3, 5, 7, 9, 11],
+	EVEN: [2, 4, 6, 8, 10, 12],
+	JAN_JUL: [1, 7],
+	FEB_AUG: [2, 8],
+	MAR_SEP: [3, 9],
+	APR_OCT: [4, 10],
+	MAY_NOV: [5, 11],
+	JUN_DEC: [6, 12],
 };
 
 export function roundMoney(value: number): number {
@@ -163,31 +211,38 @@ export function normalizeIsoDate(value: string | Date): string {
 	throw new Error(`Invalid ISO date: ${value}`);
 }
 
+export function getGstCycleEndMonths(
+	settings: Pick<GstSettings, "filingFrequency" | "filingPeriod">,
+): number[] {
+	if (settings.filingFrequency === "MONTHLY") {
+		return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+	}
+
+	if (!settings.filingPeriod) {
+		throw new Error("GST filing period is required for this frequency.");
+	}
+
+	return GST_FILING_PERIOD_END_MONTHS[settings.filingPeriod];
+}
+
 export function generateGstPeriods(
+	settings: Pick<
+		GstSettings,
+		"registrationStartDate" | "filingFrequency" | "filingPeriod"
+	>,
 	today = getTodayInTimezone(),
 	monthsAhead = 12,
 ): { periodStart: string; periodEnd: string; dueDate: string }[] {
 	const periods: { periodStart: string; periodEnd: string; dueDate: string }[] =
 		[];
-	const registrationStart = parseIsoDate(GST_REGISTRATION_START_DATE);
+	const registrationStart = parseIsoDate(settings.registrationStartDate);
 	const horizon = endOfMonth(addMonths(parseIsoDate(today), monthsAhead));
+	const cycleEndMonths = getGstCycleEndMonths(settings);
 
 	let periodStart = registrationStart;
-	let firstPeriod = true;
 
 	while (periodStart.getTime() <= horizon.getTime()) {
-		let periodEnd: Date;
-
-		if (firstPeriod) {
-			periodEnd = endOfMonth(periodStart);
-			firstPeriod = false;
-		} else {
-			const monthNumber = periodStart.getUTCMonth() + 1;
-			periodEnd =
-				monthNumber % 2 === 0
-					? endOfMonth(addMonths(periodStart, 1))
-					: endOfMonth(periodStart);
-		}
+		const periodEnd = getNextCycleEnd(periodStart, cycleEndMonths);
 
 		const periodStartIso = formatIsoDate(periodStart);
 		const periodEndIso = formatIsoDate(periodEnd);
@@ -202,6 +257,25 @@ export function generateGstPeriods(
 	}
 
 	return periods;
+}
+
+function getNextCycleEnd(periodStart: Date, cycleEndMonths: number[]): Date {
+	const startYear = periodStart.getUTCFullYear();
+	const startMonth = periodStart.getUTCMonth() + 1;
+
+	for (let yearOffset = 0; yearOffset <= 1; yearOffset += 1) {
+		const year = startYear + yearOffset;
+
+		for (const month of cycleEndMonths) {
+			if (yearOffset === 0 && month < startMonth) {
+				continue;
+			}
+
+			return endOfMonth(new Date(Date.UTC(year, month - 1, 1)));
+		}
+	}
+
+	throw new Error("Unable to determine GST cycle end.");
 }
 
 export function getGstDueDate(periodEnd: string): string {
