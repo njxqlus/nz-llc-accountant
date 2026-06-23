@@ -169,7 +169,10 @@ async function fetchJson<T>(
 	input: RequestInfo,
 	init?: RequestInit,
 ): Promise<T> {
-	const response = await fetch(input, init);
+	const response = await fetch(input, {
+		cache: "no-store",
+		...init,
+	});
 
 	if (!response.ok) {
 		const payload = (await response.json().catch(() => null)) as {
@@ -183,6 +186,20 @@ async function fetchJson<T>(
 	}
 
 	return (await response.json()) as T;
+}
+
+function upsertExpense(expenses: Expense[], nextExpense: Expense): Expense[] {
+	const existingIndex = expenses.findIndex(
+		(expense) => expense.id === nextExpense.id,
+	);
+
+	if (existingIndex === -1) {
+		return [nextExpense, ...expenses];
+	}
+
+	const nextExpenses = [...expenses];
+	nextExpenses[existingIndex] = nextExpense;
+	return nextExpenses;
 }
 
 async function copyValue(label: string, value: string) {
@@ -325,6 +342,7 @@ export function App() {
 			};
 
 			let expenseId = editor.id;
+			let savedExpense: Expense | null = null;
 
 			if (expenseId == null) {
 				const created = await fetchJson<Expense>("/api/expenses/manual", {
@@ -333,8 +351,9 @@ export function App() {
 					body: JSON.stringify(payload),
 				});
 				expenseId = created.id;
+				savedExpense = created;
 			} else {
-				await fetchJson<Expense>(`/api/expenses/${expenseId}`, {
+				savedExpense = await fetchJson<Expense>(`/api/expenses/${expenseId}`, {
 					method: "PATCH",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(payload),
@@ -342,9 +361,18 @@ export function App() {
 			}
 
 			if (publishAfterSave && expenseId) {
-				await fetchJson<Expense>(`/api/expenses/${expenseId}/publish`, {
-					method: "POST",
-				});
+				savedExpense = await fetchJson<Expense>(
+					`/api/expenses/${expenseId}/publish`,
+					{
+						method: "POST",
+					},
+				);
+			}
+
+			if (savedExpense) {
+				setExpenses((currentExpenses) =>
+					upsertExpense(currentExpenses, savedExpense),
+				);
 			}
 
 			setIsEditorOpen(false);
@@ -392,9 +420,15 @@ export function App() {
 
 	async function publishExpense(id: string) {
 		try {
-			await fetchJson<Expense>(`/api/expenses/${id}/publish`, {
-				method: "POST",
-			});
+			const publishedExpense = await fetchJson<Expense>(
+				`/api/expenses/${id}/publish`,
+				{
+					method: "POST",
+				},
+			);
+			setExpenses((currentExpenses) =>
+				upsertExpense(currentExpenses, publishedExpense),
+			);
 			toast.success("Expense published.");
 			refreshDashboard();
 		} catch (publishError) {
