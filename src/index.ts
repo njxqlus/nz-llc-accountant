@@ -7,12 +7,18 @@ import {
 	buildGstReturnSummary,
 	calculateGstAmount,
 	type Expense,
+	GST_FILING_FREQUENCIES,
+	GST_FILING_PERIODS,
+	type GstFilingFrequency,
+	type GstFilingPeriod,
 	type GstPeriodFiling,
+	type GstSettings,
 	generateGstPeriods,
 	getTodayInTimezone,
 	isIsoDate,
 	normalizeIsoDate,
 	roundMoney,
+	type SaveGstSettingsResponse,
 	TEMPORARY_ASSET_TTL_SECONDS,
 	type UploadExpensesResponse,
 } from "./lib/shared";
@@ -42,11 +48,26 @@ type GstPeriodFilingRow = {
 	updated_at: string;
 };
 
+type GstSettingsRow = {
+	id: number;
+	registration_start_date: string | Date;
+	filing_frequency: GstFilingFrequency;
+	filing_period: GstFilingPeriod | null;
+	created_at: string;
+	updated_at: string;
+};
+
 type ExpenseInput = {
 	title: string;
 	expenseDate: string | null;
 	amount: number | null;
 	gstEnabled: boolean;
+};
+
+type GstSettingsInput = {
+	registrationStartDate: string;
+	filingFrequency: GstFilingFrequency;
+	filingPeriod: GstFilingPeriod | null;
 };
 
 const PORT = Number(process.env.PORT ?? "3000");
@@ -158,6 +179,24 @@ const server = serve({
 				}
 			},
 		},
+		"/api/settings/gst": {
+			async GET() {
+				try {
+					return jsonResponse(await getGstSettings());
+				} catch (error) {
+					return handleError(error);
+				}
+			},
+			async PUT(request) {
+				try {
+					const payload = await request.json();
+					const result = await saveGstSettings(payload);
+					return jsonResponse(result);
+				} catch (error) {
+					return handleError(error);
+				}
+			},
+		},
 		"/api/gst/periods": {
 			async GET() {
 				try {
@@ -254,6 +293,18 @@ async function initializeDatabase() {
 	await sql`
 		create index if not exists expenses_expense_date_idx
 		on expenses (expense_date desc nulls last, created_at desc)
+	`;
+
+	await sql`
+		create table if not exists gst_settings (
+			id integer primary key,
+			registration_start_date date not null,
+			filing_frequency text not null,
+			filing_period text,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			check (id = 1)
+		)
 	`;
 }
 
@@ -481,6 +532,7 @@ async function deleteExpense(id: string): Promise<void> {
 }
 
 async function buildGstPeriodsResponse() {
+	const settings = await getRequiredGstSettings();
 	const [expenses, filings] = await Promise.all([
 		listExpenses(),
 		listPeriodFilings(),
@@ -493,7 +545,7 @@ async function buildGstPeriodsResponse() {
 	);
 	const today = getTodayInTimezone();
 
-	return generateGstPeriods(today).map((period) => {
+	return generateGstPeriods(settings, today).map((period) => {
 		const filing = filingMap.get(
 			periodKey(period.periodStart, period.periodEnd),
 		);
@@ -508,7 +560,75 @@ async function buildGstPeriodsResponse() {
 	});
 }
 
+async function getGstSettings(): Promise<GstSettings | null> {
+	const [row] = await sql<GstSettingsRow[]>`
+		select *
+		from gst_settings
+		where id = 1
+		limit 1
+	`;
+
+	return row ? mapGstSettingsRow(row) : null;
+}
+
+async function getRequiredGstSettings(): Promise<GstSettings> {
+	const settings = await getGstSettings();
+
+	if (!settings) {
+		throw new HttpError(409, "GST settings must be configured first.");
+	}
+
+	return settings;
+}
+
+async function saveGstSettings(
+	payload: unknown,
+): Promise<SaveGstSettingsResponse> {
+	const input = normalizeGstSettingsInput(payload);
+	const previousSettings = await getGstSettings();
+	const resetFilings =
+		previousSettings != null && hasGstScheduleChanged(previousSettings, input);
+
+	const [row] = await sql<GstSettingsRow[]>`
+		insert into gst_settings (
+			id,
+			registration_start_date,
+			filing_frequency,
+			filing_period,
+			created_at,
+			updated_at
+		) values (
+			1,
+			${input.registrationStartDate},
+			${input.filingFrequency},
+			${input.filingPeriod},
+			coalesce((select created_at from gst_settings where id = 1), now()),
+			now()
+		)
+		on conflict (id)
+		do update set
+			registration_start_date = excluded.registration_start_date,
+			filing_frequency = excluded.filing_frequency,
+			filing_period = excluded.filing_period,
+			updated_at = now()
+		returning *
+	`;
+
+	if (resetFilings) {
+		await sql`
+			delete from gst_period_filings
+		`;
+	}
+
+	return {
+		settings: mapGstSettingsRow(ensureRow(row, "Failed to save GST settings.")),
+		resetFilings,
+	};
+}
+
 async function getGstReturn(periodStart: string, periodEnd: string) {
+	await getRequiredGstSettings();
+
 	if (!isIsoDate(periodStart) || !isIsoDate(periodEnd)) {
 		throw new HttpError(400, "Invalid period.");
 	}
@@ -532,6 +652,8 @@ async function setPeriodFiled(
 	periodEnd: string,
 	filed: boolean,
 ): Promise<GstPeriodFiling> {
+	await getRequiredGstSettings();
+
 	if (!isIsoDate(periodStart) || !isIsoDate(periodEnd)) {
 		throw new HttpError(400, "Invalid period.");
 	}
@@ -660,6 +782,83 @@ function normalizeExpenseInput(
 	};
 }
 
+function normalizeGstSettingsInput(payload: unknown): GstSettingsInput {
+	if (payload == null || typeof payload !== "object") {
+		throw new HttpError(400, "Invalid GST settings payload.");
+	}
+
+	const record = payload as Record<string, unknown>;
+	const registrationStartDate = record.registrationStartDate;
+	const filingFrequency = record.filingFrequency;
+	const filingPeriod = record.filingPeriod;
+
+	if (!isIsoDate(registrationStartDate)) {
+		throw new HttpError(
+			400,
+			"Registration start date must be in YYYY-MM-DD format.",
+		);
+	}
+
+	if (
+		typeof filingFrequency !== "string" ||
+		!GST_FILING_FREQUENCIES.includes(filingFrequency as GstFilingFrequency)
+	) {
+		throw new HttpError(400, "Invalid GST filing frequency.");
+	}
+
+	if (filingFrequency === "MONTHLY") {
+		return {
+			registrationStartDate,
+			filingFrequency,
+			filingPeriod: null,
+		};
+	}
+
+	if (
+		typeof filingPeriod !== "string" ||
+		!GST_FILING_PERIODS.includes(filingPeriod as GstFilingPeriod)
+	) {
+		throw new HttpError(400, "Invalid GST filing period.");
+	}
+
+	if (
+		filingFrequency === "TWO_MONTHLY" &&
+		!["ODD", "EVEN"].includes(filingPeriod)
+	) {
+		throw new HttpError(
+			400,
+			"Two-monthly GST requires odd or even filing periods.",
+		);
+	}
+
+	if (
+		filingFrequency === "SIX_MONTHLY" &&
+		["ODD", "EVEN"].includes(filingPeriod)
+	) {
+		throw new HttpError(
+			400,
+			"Six-monthly GST requires a six-month filing period option.",
+		);
+	}
+
+	return {
+		registrationStartDate,
+		filingFrequency: filingFrequency as GstFilingFrequency,
+		filingPeriod: filingPeriod as GstFilingPeriod,
+	};
+}
+
+function hasGstScheduleChanged(
+	current: GstSettings,
+	next: GstSettingsInput,
+): boolean {
+	return (
+		current.registrationStartDate !== next.registrationStartDate ||
+		current.filingFrequency !== next.filingFrequency ||
+		current.filingPeriod !== next.filingPeriod
+	);
+}
+
 function validateDraftExpense(input: ExpenseInput, allowEmptyTitle: boolean) {
 	if (!allowEmptyTitle && input.title.length === 0) {
 		throw new HttpError(400, "Draft manual expenses require a title.");
@@ -700,6 +899,16 @@ function mapExpenseRow(row: ExpenseRow): Expense {
 		assetId: row.asset_id,
 		assetIsTemporary: row.asset_is_temporary,
 		assetFilename: row.asset_filename,
+		createdAt: new Date(row.created_at).toISOString(),
+		updatedAt: new Date(row.updated_at).toISOString(),
+	};
+}
+
+function mapGstSettingsRow(row: GstSettingsRow): GstSettings {
+	return {
+		registrationStartDate: normalizeIsoDate(row.registration_start_date),
+		filingFrequency: row.filing_frequency,
+		filingPeriod: row.filing_period,
 		createdAt: new Date(row.created_at).toISOString(),
 		updatedAt: new Date(row.updated_at).toISOString(),
 	};

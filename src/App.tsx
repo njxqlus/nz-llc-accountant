@@ -58,8 +58,12 @@ import {
 } from "@/components/ui/table";
 import type {
 	Expense,
+	GstFilingFrequency,
+	GstFilingPeriod,
 	GstPeriodSummary,
 	GstReturnSummary,
+	GstSettings,
+	SaveGstSettingsResponse,
 	UploadExpensesResponse,
 } from "@/lib/shared";
 import { calculateGstAmount, normalizeIsoDate, roundMoney } from "@/lib/shared";
@@ -79,6 +83,12 @@ type EditorState = {
 };
 
 type SortOrder = "newest" | "oldest";
+type GstSettingsFormState = {
+	registrationStartDate: string;
+	filingFrequency: GstFilingFrequency;
+	filingPeriod: GstFilingPeriod | "";
+};
+
 const currencyFormatter = new Intl.NumberFormat("en-NZ", {
 	style: "currency",
 	currency: "NZD",
@@ -92,6 +102,35 @@ const dateFormatter = new Intl.DateTimeFormat("en-NZ", {
 	year: "numeric",
 });
 
+const GST_FREQUENCY_OPTIONS: {
+	value: GstFilingFrequency;
+	label: string;
+}[] = [
+	{ value: "MONTHLY", label: "Monthly" },
+	{ value: "TWO_MONTHLY", label: "Two-monthly" },
+	{ value: "SIX_MONTHLY", label: "Six-monthly" },
+];
+
+const TWO_MONTHLY_PERIOD_OPTIONS: {
+	value: GstFilingPeriod;
+	label: string;
+}[] = [
+	{ value: "ODD", label: "Ending in odd months" },
+	{ value: "EVEN", label: "Ending in even months" },
+];
+
+const SIX_MONTHLY_PERIOD_OPTIONS: {
+	value: GstFilingPeriod;
+	label: string;
+}[] = [
+	{ value: "JAN_JUL", label: "January and July" },
+	{ value: "FEB_AUG", label: "February and August" },
+	{ value: "MAR_SEP", label: "March and September" },
+	{ value: "APR_OCT", label: "April and October" },
+	{ value: "MAY_NOV", label: "May and November" },
+	{ value: "JUN_DEC", label: "June and December" },
+];
+
 function createBlankEditor(): EditorState {
 	return {
 		id: null,
@@ -104,6 +143,64 @@ function createBlankEditor(): EditorState {
 		assetFilename: null,
 		assetIsTemporary: false,
 	};
+}
+
+function createSettingsFormState(
+	settings: GstSettings | null,
+): GstSettingsFormState {
+	return {
+		registrationStartDate: settings?.registrationStartDate ?? "",
+		filingFrequency: settings?.filingFrequency ?? "TWO_MONTHLY",
+		filingPeriod: settings?.filingPeriod ?? "ODD",
+	};
+}
+
+function getFilingPeriodOptions(
+	filingFrequency: GstFilingFrequency,
+): { value: GstFilingPeriod; label: string }[] {
+	if (filingFrequency === "TWO_MONTHLY") {
+		return TWO_MONTHLY_PERIOD_OPTIONS;
+	}
+
+	if (filingFrequency === "SIX_MONTHLY") {
+		return SIX_MONTHLY_PERIOD_OPTIONS;
+	}
+
+	return [];
+}
+
+function settingsRequireFilingPeriod(
+	filingFrequency: GstFilingFrequency,
+): boolean {
+	return filingFrequency !== "MONTHLY";
+}
+
+function normalizeSettingsPayload(
+	settings: GstSettingsFormState,
+): Omit<GstSettings, "createdAt" | "updatedAt"> {
+	return {
+		registrationStartDate: settings.registrationStartDate,
+		filingFrequency: settings.filingFrequency,
+		filingPeriod: settingsRequireFilingPeriod(settings.filingFrequency)
+			? settings.filingPeriod || null
+			: null,
+	};
+}
+
+function haveSettingsChanged(
+	current: GstSettings | null,
+	next: GstSettingsFormState,
+): boolean {
+	if (!current) {
+		return true;
+	}
+
+	const normalizedNext = normalizeSettingsPayload(next);
+	return (
+		current.registrationStartDate !== normalizedNext.registrationStartDate ||
+		current.filingFrequency !== normalizedNext.filingFrequency ||
+		current.filingPeriod !== normalizedNext.filingPeriod
+	);
 }
 
 function expenseToEditor(expense: Expense): EditorState {
@@ -346,18 +443,24 @@ function ReturnValueRow({
 export function App() {
 	const uploadInputRef = useRef<HTMLInputElement | null>(null);
 	const expensesSectionRef = useRef<HTMLElement | null>(null);
+	const [gstSettings, setGstSettings] = useState<GstSettings | null>(null);
+	const [gstSettingsForm, setGstSettingsForm] = useState<GstSettingsFormState>(
+		() => createSettingsFormState(null),
+	);
 	const [expenses, setExpenses] = useState<Expense[]>([]);
 	const [periods, setPeriods] = useState<GstPeriodSummary[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [uploading, setUploading] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const [savingSettings, setSavingSettings] = useState(false);
 	const [, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 	const [expenseSearch, setExpenseSearch] = useState("");
 	const [expenseDateFrom, setExpenseDateFrom] = useState("");
 	const [expenseDateTo, setExpenseDateTo] = useState("");
 	const [historyOpen, setHistoryOpen] = useState(false);
+	const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isEditorOpen, setIsEditorOpen] = useState(false);
 	const [editor, setEditor] = useState<EditorState>(createBlankEditor);
@@ -375,6 +478,19 @@ export function App() {
 
 		try {
 			setError(null);
+			const nextSettings = await fetchJson<GstSettings | null>(
+				"/api/settings/gst",
+			);
+			setGstSettings(nextSettings);
+			setGstSettingsForm(createSettingsFormState(nextSettings));
+			setSettingsPanelOpen(nextSettings == null);
+
+			if (!nextSettings) {
+				setExpenses([]);
+				setPeriods([]);
+				return;
+			}
+
 			const [nextExpenses, nextPeriods] = await Promise.all([
 				fetchJson<Expense[]>("/api/expenses"),
 				fetchJson<GstPeriodSummary[]>("/api/gst/periods"),
@@ -397,6 +513,16 @@ export function App() {
 	useEffect(() => {
 		void loadDashboard(true);
 	}, []);
+
+	const filingPeriodOptions = getFilingPeriodOptions(
+		gstSettingsForm.filingFrequency,
+	);
+	const settingsConfigured = gstSettings != null;
+	const settingsDirty = haveSettingsChanged(gstSettings, gstSettingsForm);
+	const settingsCanSave =
+		gstSettingsForm.registrationStartDate.length > 0 &&
+		(!settingsRequireFilingPeriod(gstSettingsForm.filingFrequency) ||
+			gstSettingsForm.filingPeriod.length > 0);
 
 	const normalizedExpenseSearch = deferredExpenseSearch.trim().toLowerCase();
 	const filteredExpenses = expenses.filter((expense) => {
@@ -447,6 +573,52 @@ export function App() {
 		startRefreshTransition(() => {
 			void loadDashboard();
 		});
+	}
+
+	async function saveGstSettings() {
+		if (!settingsCanSave) {
+			toast.error("Complete the GST settings before saving.");
+			return;
+		}
+
+		if (
+			gstSettings &&
+			settingsDirty &&
+			!window.confirm(
+				"Changing GST settings will reset all filed GST period markers. Continue?",
+			)
+		) {
+			return;
+		}
+
+		setSavingSettings(true);
+
+		try {
+			const response = await fetchJson<SaveGstSettingsResponse>(
+				"/api/settings/gst",
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(normalizeSettingsPayload(gstSettingsForm)),
+				},
+			);
+			setGstSettings(response.settings);
+			setGstSettingsForm(createSettingsFormState(response.settings));
+			toast.success(
+				response.resetFilings
+					? "GST settings saved. Filed GST history was reset."
+					: "GST settings saved.",
+			);
+			refreshDashboard();
+		} catch (saveError) {
+			toast.error(
+				saveError instanceof Error
+					? saveError.message
+					: "Unable to save GST settings.",
+			);
+		} finally {
+			setSavingSettings(false);
+		}
 	}
 
 	function applyExpenseDateFilter(dateFrom: string, dateTo: string) {
@@ -704,384 +876,662 @@ export function App() {
 					</Alert>
 				) : null}
 
-				<section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-					<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
-						<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-							<div className="flex flex-col gap-1">
-								<CardTitle>GST periods</CardTitle>
-								<CardDescription>
-									Current GST work, with older periods available in history.
-								</CardDescription>
-							</div>
-						</CardHeader>
-						<CardContent className="grid gap-4">
-							{loading ? (
-								<p className="text-sm text-muted-foreground">
-									Loading periods…
-								</p>
-							) : visiblePeriods.length === 0 ? (
-								<p className="text-sm text-muted-foreground">
-									No GST periods available.
-								</p>
-							) : (
-								visiblePeriods.map((period) => (
-									<GstPeriodCard
-										key={`${period.periodStart}-${period.periodEnd}`}
-										period={period}
-										onFilterExpenses={(selectedPeriod) =>
-											applyExpenseDateFilter(
-												selectedPeriod.periodStart,
-												selectedPeriod.periodEnd,
-											)
-										}
-										onOpenReturn={(selectedPeriod) =>
-											void loadReturnSummary(selectedPeriod)
-										}
-										onToggleFiled={(selectedPeriod) =>
-											void togglePeriodFiled(
-												selectedPeriod,
-												!selectedPeriod.filed,
-											)
-										}
-									/>
-								))
-							)}
-							{!loading && historyPeriods.length > 0 ? (
-								<div className="rounded-2xl border border-border/70 bg-white/70">
-									<button
-										type="button"
-										onClick={() => setHistoryOpen((open) => !open)}
-										className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left"
-									>
-										<div>
-											<p className="font-medium text-foreground">History</p>
-											<p className="text-sm text-muted-foreground">
-												All previous GST periods from registration start.
-											</p>
-										</div>
-										<ChevronDownIcon
-											className={`size-4 shrink-0 text-muted-foreground transition-transform ${
-												historyOpen ? "rotate-180" : ""
-											}`}
-										/>
-									</button>
-									{historyOpen ? (
-										<div className="grid gap-4 border-t border-border/70 p-4">
-											{historyPeriods.map((period) => (
-												<GstPeriodCard
-													key={`${period.periodStart}-${period.periodEnd}`}
-													period={period}
-													onFilterExpenses={(selectedPeriod) =>
-														applyExpenseDateFilter(
-															selectedPeriod.periodStart,
-															selectedPeriod.periodEnd,
-														)
-													}
-													onOpenReturn={(selectedPeriod) =>
-														void loadReturnSummary(selectedPeriod)
-													}
-													onToggleFiled={(selectedPeriod) =>
-														void togglePeriodFiled(
-															selectedPeriod,
-															!selectedPeriod.filed,
-														)
+				{!settingsConfigured ? (
+					<section>
+						<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
+							<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<div className="flex flex-col gap-1">
+									<CardTitle>GST settings</CardTitle>
+									<CardDescription>
+										Set the filing schedule before using the dashboard.
+									</CardDescription>
+								</div>
+								<Badge
+									variant="outline"
+									className="border-amber-700 text-amber-900"
+								>
+									Setup required
+								</Badge>
+							</CardHeader>
+							<CardContent className="grid gap-5">
+								<Alert>
+									<AlertCircleIcon />
+									<AlertTitle>Finish GST setup first</AlertTitle>
+									<AlertDescription>
+										GST periods and expense tools stay hidden until these
+										settings are saved.
+									</AlertDescription>
+								</Alert>
+								<div className="grid gap-5 lg:grid-cols-3">
+									<div className="grid gap-2">
+										<Label htmlFor="gst-frequency">GST frequency</Label>
+										<Select
+											value={gstSettingsForm.filingFrequency}
+											onValueChange={(value) =>
+												setGstSettingsForm((current) => ({
+													...current,
+													filingFrequency: value as GstFilingFrequency,
+													filingPeriod:
+														value === "MONTHLY"
+															? ""
+															: value === "TWO_MONTHLY"
+																? "ODD"
+																: "JAN_JUL",
+												}))
+											}
+										>
+											<SelectTrigger id="gst-frequency">
+												<SelectValue placeholder="Choose frequency" />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectGroup>
+													{GST_FREQUENCY_OPTIONS.map((option) => (
+														<SelectItem key={option.value} value={option.value}>
+															{option.label}
+														</SelectItem>
+													))}
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+									</div>
+									<div className="grid gap-2">
+										<Label htmlFor="gst-filing-period">Filing periods</Label>
+										<Select
+											value={
+												settingsRequireFilingPeriod(
+													gstSettingsForm.filingFrequency,
+												)
+													? gstSettingsForm.filingPeriod
+													: ""
+											}
+											onValueChange={(value) =>
+												setGstSettingsForm((current) => ({
+													...current,
+													filingPeriod: value as GstFilingPeriod,
+												}))
+											}
+											disabled={
+												!settingsRequireFilingPeriod(
+													gstSettingsForm.filingFrequency,
+												)
+											}
+										>
+											<SelectTrigger id="gst-filing-period">
+												<SelectValue
+													placeholder={
+														gstSettingsForm.filingFrequency === "MONTHLY"
+															? "Not needed for monthly"
+															: "Choose filing periods"
 													}
 												/>
-											))}
-										</div>
-									) : null}
+											</SelectTrigger>
+											<SelectContent>
+												<SelectGroup>
+													{filingPeriodOptions.map((option) => (
+														<SelectItem key={option.value} value={option.value}>
+															{option.label}
+														</SelectItem>
+													))}
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+									</div>
+									<div className="grid gap-2">
+										<Label htmlFor="gst-registration-start-date">
+											Registration start date
+										</Label>
+										<Input
+											id="gst-registration-start-date"
+											type="date"
+											value={gstSettingsForm.registrationStartDate}
+											onChange={(event) =>
+												setGstSettingsForm((current) => ({
+													...current,
+													registrationStartDate: event.target.value,
+												}))
+											}
+										/>
+									</div>
 								</div>
-							) : null}
-						</CardContent>
-					</Card>
-
-					<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
-						<CardHeader>
-							<CardTitle>Upload invoice files</CardTitle>
-							<CardDescription>
-								Each file creates one draft expense linked to a temporary asset.
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="grid gap-4">
-							<Alert>
-								<FileUpIcon />
-								<AlertTitle>Temporary media assets</AlertTitle>
-								<AlertDescription>
-									Uploads expire after 24 hours unless the draft expense is
-									published and the asset is finalized.
-								</AlertDescription>
-							</Alert>
-							<label
-								className={`flex min-h-64 cursor-pointer flex-col items-center justify-center gap-4 rounded-[1.75rem] border border-dashed px-6 py-8 text-center transition-colors ${
-									isDragging
-										? "border-amber-700 bg-amber-100/70"
-										: "border-amber-950/20 bg-[#f8f2e7]"
-								}`}
-								onDragEnter={() => setIsDragging(true)}
-								onDragOver={(event) => {
-									event.preventDefault();
-									setIsDragging(true);
-								}}
-								onDragLeave={(event) => {
-									if (
-										event.currentTarget.contains(event.relatedTarget as Node)
-									) {
-										return;
-									}
-									setIsDragging(false);
-								}}
-								onDrop={(event) => {
-									event.preventDefault();
-									setIsDragging(false);
-									void uploadFiles(event.dataTransfer.files);
-								}}
-							>
-								<div className="flex size-16 items-center justify-center rounded-full bg-[#1e1f1b] text-stone-100">
-									<FileUpIcon className="size-7" />
-								</div>
-								<div className="flex flex-col gap-2">
-									<p className="text-lg font-semibold">
-										Drop invoices here or choose files
+								<div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-[#fbfaf7] px-4 py-3">
+									<p className="text-sm text-muted-foreground">
+										Changing these settings resets filed GST period markers but
+										keeps all expenses.
 									</p>
-								</div>
-								<div className="flex flex-wrap justify-center gap-3">
 									<Button
 										type="button"
-										variant="secondary"
-										disabled={uploading}
-										onClick={() => uploadInputRef.current?.click()}
-									>
-										<FolderOpenIcon data-icon="inline-start" />
-										{uploading ? "Uploading…" : "Choose files"}
-									</Button>
-									<Badge variant="outline">One file = one draft</Badge>
-								</div>
-								<input
-									ref={uploadInputRef}
-									className="hidden"
-									type="file"
-									multiple
-									onChange={(event) => {
-										if (event.target.files) {
-											void uploadFiles(event.target.files);
-											event.target.value = "";
+										disabled={
+											savingSettings || !settingsCanSave || !settingsDirty
 										}
-									}}
-								/>
-							</label>
-							<Button type="button" onClick={openManualExpenseEditor}>
-								<PlusIcon data-icon="inline-start" />
-								Add Expense
-							</Button>
-						</CardContent>
-					</Card>
-				</section>
+										onClick={() => void saveGstSettings()}
+									>
+										{savingSettings ? "Saving…" : "Save GST settings"}
+									</Button>
+								</div>
+							</CardContent>
+						</Card>
+					</section>
+				) : null}
 
-				<section ref={expensesSectionRef}>
-					<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
-						<CardHeader className="flex flex-col gap-4">
-							<div className="flex flex-col gap-1">
-								<CardTitle>Expenses</CardTitle>
-								<CardDescription>
-									Drafts stay visually distinct and published expenses remain
-									editable.
-								</CardDescription>
-							</div>
-							<div className="flex flex-wrap gap-3">
-								<Input
-									type="search"
-									value={expenseSearch}
-									onChange={(event) => setExpenseSearch(event.target.value)}
-									placeholder="Search by title"
-									className="w-full sm:w-[220px]"
-									aria-label="Search expenses by title"
-								/>
-								<Input
-									type="date"
-									value={expenseDateFrom}
-									onChange={(event) => setExpenseDateFrom(event.target.value)}
-									className="w-full sm:w-[170px]"
-									aria-label="Filter expenses from date"
-								/>
-								<Input
-									type="date"
-									value={expenseDateTo}
-									onChange={(event) => setExpenseDateTo(event.target.value)}
-									className="w-full sm:w-[170px]"
-									aria-label="Filter expenses to date"
-								/>
-								<Select
-									value={sortOrder}
-									onValueChange={(value) => setSortOrder(value as SortOrder)}
-								>
-									<SelectTrigger className="w-[160px]">
-										<SelectValue placeholder="Sort order" />
-									</SelectTrigger>
-									<SelectContent align="end">
-										<SelectGroup>
-											<SelectItem value="newest">Newest first</SelectItem>
-											<SelectItem value="oldest">Oldest first</SelectItem>
-										</SelectGroup>
-									</SelectContent>
-								</Select>
-								<Button
-									type="button"
-									variant="outline"
-									onClick={clearExpenseFilters}
-								>
-									Clear filters
-								</Button>
-							</div>
-						</CardHeader>
-						<CardContent>
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>Date</TableHead>
-										<TableHead>Title</TableHead>
-										<TableHead>Amount</TableHead>
-										<TableHead>GST</TableHead>
-										<TableHead>GST amount</TableHead>
-										<TableHead>Status</TableHead>
-										<TableHead>File</TableHead>
-										<TableHead className="text-right">Actions</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
+				{settingsConfigured ? (
+					<>
+						<section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+							<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
+								<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+									<div className="flex flex-col gap-1">
+										<CardTitle>GST periods</CardTitle>
+										<CardDescription>
+											Current GST work, with older periods available in history.
+										</CardDescription>
+									</div>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={() => setSettingsPanelOpen((open) => !open)}
+									>
+										{settingsPanelOpen ? "Hide GST settings" : "GST settings"}
+									</Button>
+								</CardHeader>
+								<CardContent className="grid gap-4">
+									{settingsPanelOpen ? (
+										<div className="grid gap-5 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4">
+											<div className="grid gap-5 lg:grid-cols-3">
+												<div className="grid gap-2">
+													<Label htmlFor="gst-frequency">GST frequency</Label>
+													<Select
+														value={gstSettingsForm.filingFrequency}
+														onValueChange={(value) =>
+															setGstSettingsForm((current) => ({
+																...current,
+																filingFrequency: value as GstFilingFrequency,
+																filingPeriod:
+																	value === "MONTHLY"
+																		? ""
+																		: value === "TWO_MONTHLY"
+																			? "ODD"
+																			: "JAN_JUL",
+															}))
+														}
+													>
+														<SelectTrigger id="gst-frequency">
+															<SelectValue placeholder="Choose frequency" />
+														</SelectTrigger>
+														<SelectContent>
+															<SelectGroup>
+																{GST_FREQUENCY_OPTIONS.map((option) => (
+																	<SelectItem
+																		key={option.value}
+																		value={option.value}
+																	>
+																		{option.label}
+																	</SelectItem>
+																))}
+															</SelectGroup>
+														</SelectContent>
+													</Select>
+												</div>
+												<div className="grid gap-2">
+													<Label htmlFor="gst-filing-period">
+														Filing periods
+													</Label>
+													<Select
+														value={
+															settingsRequireFilingPeriod(
+																gstSettingsForm.filingFrequency,
+															)
+																? gstSettingsForm.filingPeriod
+																: ""
+														}
+														onValueChange={(value) =>
+															setGstSettingsForm((current) => ({
+																...current,
+																filingPeriod: value as GstFilingPeriod,
+															}))
+														}
+														disabled={
+															!settingsRequireFilingPeriod(
+																gstSettingsForm.filingFrequency,
+															)
+														}
+													>
+														<SelectTrigger id="gst-filing-period">
+															<SelectValue
+																placeholder={
+																	gstSettingsForm.filingFrequency === "MONTHLY"
+																		? "Not needed for monthly"
+																		: "Choose filing periods"
+																}
+															/>
+														</SelectTrigger>
+														<SelectContent>
+															<SelectGroup>
+																{filingPeriodOptions.map((option) => (
+																	<SelectItem
+																		key={option.value}
+																		value={option.value}
+																	>
+																		{option.label}
+																	</SelectItem>
+																))}
+															</SelectGroup>
+														</SelectContent>
+													</Select>
+												</div>
+												<div className="grid gap-2">
+													<Label htmlFor="gst-registration-start-date">
+														Registration start date
+													</Label>
+													<Input
+														id="gst-registration-start-date"
+														type="date"
+														value={gstSettingsForm.registrationStartDate}
+														onChange={(event) =>
+															setGstSettingsForm((current) => ({
+																...current,
+																registrationStartDate: event.target.value,
+															}))
+														}
+													/>
+												</div>
+											</div>
+											<div className="flex flex-wrap items-center justify-between gap-3">
+												<p className="text-sm text-muted-foreground">
+													Changing these settings resets filed GST period
+													markers but keeps all expenses.
+												</p>
+												<Button
+													type="button"
+													disabled={
+														savingSettings || !settingsCanSave || !settingsDirty
+													}
+													onClick={() => void saveGstSettings()}
+												>
+													{savingSettings ? "Saving…" : "Save GST settings"}
+												</Button>
+											</div>
+										</div>
+									) : null}
 									{loading ? (
-										<TableRow>
-											<TableCell
-												colSpan={8}
-												className="py-10 text-center text-muted-foreground"
-											>
-												Loading expenses…
-											</TableCell>
-										</TableRow>
-									) : expenses.length === 0 ? (
-										<TableRow>
-											<TableCell
-												colSpan={8}
-												className="py-10 text-center text-muted-foreground"
-											>
-												No expenses yet. Upload a file or add a manual expense.
-											</TableCell>
-										</TableRow>
-									) : sortedExpenses.length === 0 ? (
-										<TableRow>
-											<TableCell
-												colSpan={8}
-												className="py-10 text-center text-muted-foreground"
-											>
-												No expenses match the active filters.
-											</TableCell>
-										</TableRow>
+										<p className="text-sm text-muted-foreground">
+											Loading periods…
+										</p>
+									) : visiblePeriods.length === 0 ? (
+										<p className="text-sm text-muted-foreground">
+											No GST periods available.
+										</p>
 									) : (
-										sortedExpenses.map((expense) => (
-											<TableRow
-												key={expense.id}
-												className={
-													expense.isDraft
-														? "bg-amber-50/60 hover:bg-amber-50"
-														: undefined
+										visiblePeriods.map((period) => (
+											<GstPeriodCard
+												key={`${period.periodStart}-${period.periodEnd}`}
+												period={period}
+												onFilterExpenses={(selectedPeriod) =>
+													applyExpenseDateFilter(
+														selectedPeriod.periodStart,
+														selectedPeriod.periodEnd,
+													)
 												}
+												onOpenReturn={(selectedPeriod) =>
+													void loadReturnSummary(selectedPeriod)
+												}
+												onToggleFiled={(selectedPeriod) =>
+													void togglePeriodFiled(
+														selectedPeriod,
+														!selectedPeriod.filed,
+													)
+												}
+											/>
+										))
+									)}
+									{!loading && historyPeriods.length > 0 ? (
+										<div className="rounded-2xl border border-border/70 bg-white/70">
+											<button
+												type="button"
+												onClick={() => setHistoryOpen((open) => !open)}
+												className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left"
 											>
-												<TableCell>
-													{expense.expenseDate
-														? formatDate(expense.expenseDate)
-														: "Draft"}
-												</TableCell>
-												<TableCell className="max-w-[240px] whitespace-normal">
-													<div className="flex flex-col gap-1">
-														<span className="font-medium">
-															{expense.title || "Untitled upload"}
-														</span>
-														<span className="text-xs text-muted-foreground">
-															Updated {formatDateTime(expense.updatedAt)}
-														</span>
-													</div>
-												</TableCell>
-												<TableCell>
-													{expense.amount == null
-														? "Pending"
-														: formatCurrency(expense.amount)}
-												</TableCell>
-												<TableCell>
-													{expense.gstEnabled ? "Yes" : "No"}
-												</TableCell>
-												<TableCell>
-													{formatCurrency(expense.gstAmount)}
-												</TableCell>
-												<TableCell>
-													<Badge
-														variant={expense.isDraft ? "outline" : "secondary"}
+												<div>
+													<p className="font-medium text-foreground">History</p>
+													<p className="text-sm text-muted-foreground">
+														All previous GST periods from registration start.
+													</p>
+												</div>
+												<ChevronDownIcon
+													className={`size-4 shrink-0 text-muted-foreground transition-transform ${
+														historyOpen ? "rotate-180" : ""
+													}`}
+												/>
+											</button>
+											{historyOpen ? (
+												<div className="grid gap-4 border-t border-border/70 p-4">
+													{historyPeriods.map((period) => (
+														<GstPeriodCard
+															key={`${period.periodStart}-${period.periodEnd}`}
+															period={period}
+															onFilterExpenses={(selectedPeriod) =>
+																applyExpenseDateFilter(
+																	selectedPeriod.periodStart,
+																	selectedPeriod.periodEnd,
+																)
+															}
+															onOpenReturn={(selectedPeriod) =>
+																void loadReturnSummary(selectedPeriod)
+															}
+															onToggleFiled={(selectedPeriod) =>
+																void togglePeriodFiled(
+																	selectedPeriod,
+																	!selectedPeriod.filed,
+																)
+															}
+														/>
+													))}
+												</div>
+											) : null}
+										</div>
+									) : null}
+								</CardContent>
+							</Card>
+
+							<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
+								<CardHeader>
+									<CardTitle>Upload invoice files</CardTitle>
+									<CardDescription>
+										Each file creates one draft expense linked to a temporary
+										asset.
+									</CardDescription>
+								</CardHeader>
+								<CardContent className="grid gap-4">
+									<Alert>
+										<FileUpIcon />
+										<AlertTitle>Temporary media assets</AlertTitle>
+										<AlertDescription>
+											Uploads expire after 24 hours unless the draft expense is
+											published and the asset is finalized.
+										</AlertDescription>
+									</Alert>
+									<label
+										className={`flex min-h-64 cursor-pointer flex-col items-center justify-center gap-4 rounded-[1.75rem] border border-dashed px-6 py-8 text-center transition-colors ${
+											isDragging
+												? "border-amber-700 bg-amber-100/70"
+												: "border-amber-950/20 bg-[#f8f2e7]"
+										}`}
+										onDragEnter={() => setIsDragging(true)}
+										onDragOver={(event) => {
+											event.preventDefault();
+											setIsDragging(true);
+										}}
+										onDragLeave={(event) => {
+											if (
+												event.currentTarget.contains(
+													event.relatedTarget as Node,
+												)
+											) {
+												return;
+											}
+											setIsDragging(false);
+										}}
+										onDrop={(event) => {
+											event.preventDefault();
+											setIsDragging(false);
+											void uploadFiles(event.dataTransfer.files);
+										}}
+									>
+										<div className="flex size-16 items-center justify-center rounded-full bg-[#1e1f1b] text-stone-100">
+											<FileUpIcon className="size-7" />
+										</div>
+										<div className="flex flex-col gap-2">
+											<p className="text-lg font-semibold">
+												Drop invoices here or choose files
+											</p>
+										</div>
+										<div className="flex flex-wrap justify-center gap-3">
+											<Button
+												type="button"
+												variant="secondary"
+												disabled={uploading}
+												onClick={() => uploadInputRef.current?.click()}
+											>
+												<FolderOpenIcon data-icon="inline-start" />
+												{uploading ? "Uploading…" : "Choose files"}
+											</Button>
+											<Badge variant="outline">One file = one draft</Badge>
+										</div>
+										<input
+											ref={uploadInputRef}
+											className="hidden"
+											type="file"
+											multiple
+											onChange={(event) => {
+												if (event.target.files) {
+													void uploadFiles(event.target.files);
+													event.target.value = "";
+												}
+											}}
+										/>
+									</label>
+									<Button type="button" onClick={openManualExpenseEditor}>
+										<PlusIcon data-icon="inline-start" />
+										Add Expense
+									</Button>
+								</CardContent>
+							</Card>
+						</section>
+
+						<section ref={expensesSectionRef}>
+							<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
+								<CardHeader className="flex flex-col gap-4">
+									<div className="flex flex-col gap-1">
+										<CardTitle>Expenses</CardTitle>
+										<CardDescription>
+											Drafts stay visually distinct and published expenses
+											remain editable.
+										</CardDescription>
+									</div>
+									<div className="flex flex-wrap gap-3">
+										<Input
+											type="search"
+											value={expenseSearch}
+											onChange={(event) => setExpenseSearch(event.target.value)}
+											placeholder="Search by title"
+											className="w-full sm:w-[220px]"
+											aria-label="Search expenses by title"
+										/>
+										<Input
+											type="date"
+											value={expenseDateFrom}
+											onChange={(event) =>
+												setExpenseDateFrom(event.target.value)
+											}
+											className="w-full sm:w-[170px]"
+											aria-label="Filter expenses from date"
+										/>
+										<Input
+											type="date"
+											value={expenseDateTo}
+											onChange={(event) => setExpenseDateTo(event.target.value)}
+											className="w-full sm:w-[170px]"
+											aria-label="Filter expenses to date"
+										/>
+										<Select
+											value={sortOrder}
+											onValueChange={(value) =>
+												setSortOrder(value as SortOrder)
+											}
+										>
+											<SelectTrigger className="w-[160px]">
+												<SelectValue placeholder="Sort order" />
+											</SelectTrigger>
+											<SelectContent align="end">
+												<SelectGroup>
+													<SelectItem value="newest">Newest first</SelectItem>
+													<SelectItem value="oldest">Oldest first</SelectItem>
+												</SelectGroup>
+											</SelectContent>
+										</Select>
+										<Button
+											type="button"
+											variant="outline"
+											onClick={clearExpenseFilters}
+										>
+											Clear filters
+										</Button>
+									</div>
+								</CardHeader>
+								<CardContent>
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead>Date</TableHead>
+												<TableHead>Title</TableHead>
+												<TableHead>Amount</TableHead>
+												<TableHead>GST</TableHead>
+												<TableHead>GST amount</TableHead>
+												<TableHead>Status</TableHead>
+												<TableHead>File</TableHead>
+												<TableHead className="text-right">Actions</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{loading ? (
+												<TableRow>
+													<TableCell
+														colSpan={8}
+														className="py-10 text-center text-muted-foreground"
+													>
+														Loading expenses…
+													</TableCell>
+												</TableRow>
+											) : expenses.length === 0 ? (
+												<TableRow>
+													<TableCell
+														colSpan={8}
+														className="py-10 text-center text-muted-foreground"
+													>
+														No expenses yet. Upload a file or add a manual
+														expense.
+													</TableCell>
+												</TableRow>
+											) : sortedExpenses.length === 0 ? (
+												<TableRow>
+													<TableCell
+														colSpan={8}
+														className="py-10 text-center text-muted-foreground"
+													>
+														No expenses match the active filters.
+													</TableCell>
+												</TableRow>
+											) : (
+												sortedExpenses.map((expense) => (
+													<TableRow
+														key={expense.id}
 														className={
 															expense.isDraft
-																? "border-amber-700 text-amber-900"
+																? "bg-amber-50/60 hover:bg-amber-50"
 																: undefined
 														}
 													>
-														{expense.isDraft ? "Draft" : "Published"}
-													</Badge>
-												</TableCell>
-												<TableCell>
-													{expense.assetId ? (
-														<Button
-															type="button"
-															variant="link"
-															className="h-auto px-0"
-															onClick={() =>
-																window.open(
-																	`/api/assets/${expense.assetId}/file`,
-																	"_blank",
-																	"noopener,noreferrer",
-																)
-															}
-														>
-															{expense.assetFilename ?? "Open file"}
-														</Button>
-													) : (
-														<span className="text-muted-foreground">
-															No file
-														</span>
-													)}
-												</TableCell>
-												<TableCell className="text-right">
-													<div className="flex justify-end gap-2">
-														<Button
-															type="button"
-															variant="outline"
-															size="sm"
-															onClick={() => openExpenseEditor(expense)}
-														>
-															Open
-														</Button>
-														{expense.isDraft ? (
-															<Button
-																type="button"
-																size="sm"
-																onClick={() => void publishExpense(expense.id)}
+														<TableCell>
+															{expense.expenseDate
+																? formatDate(expense.expenseDate)
+																: "Draft"}
+														</TableCell>
+														<TableCell className="max-w-[240px] whitespace-normal">
+															<div className="flex flex-col gap-1">
+																<span className="font-medium">
+																	{expense.title || "Untitled upload"}
+																</span>
+																<span className="text-xs text-muted-foreground">
+																	Updated {formatDateTime(expense.updatedAt)}
+																</span>
+															</div>
+														</TableCell>
+														<TableCell>
+															{expense.amount == null
+																? "Pending"
+																: formatCurrency(expense.amount)}
+														</TableCell>
+														<TableCell>
+															{expense.gstEnabled ? "Yes" : "No"}
+														</TableCell>
+														<TableCell>
+															{formatCurrency(expense.gstAmount)}
+														</TableCell>
+														<TableCell>
+															<Badge
+																variant={
+																	expense.isDraft ? "outline" : "secondary"
+																}
+																className={
+																	expense.isDraft
+																		? "border-amber-700 text-amber-900"
+																		: undefined
+																}
 															>
-																Publish
-															</Button>
-														) : null}
-														<Button
-															type="button"
-															variant="destructive"
-															size="sm"
-															onClick={() => void deleteExpense(expense.id)}
-														>
-															Delete
-														</Button>
-													</div>
-												</TableCell>
-											</TableRow>
-										))
-									)}
-								</TableBody>
-							</Table>
-						</CardContent>
-					</Card>
-				</section>
+																{expense.isDraft ? "Draft" : "Published"}
+															</Badge>
+														</TableCell>
+														<TableCell>
+															{expense.assetId ? (
+																<Button
+																	type="button"
+																	variant="link"
+																	className="h-auto px-0"
+																	onClick={() =>
+																		window.open(
+																			`/api/assets/${expense.assetId}/file`,
+																			"_blank",
+																			"noopener,noreferrer",
+																		)
+																	}
+																>
+																	{expense.assetFilename ?? "Open file"}
+																</Button>
+															) : (
+																<span className="text-muted-foreground">
+																	No file
+																</span>
+															)}
+														</TableCell>
+														<TableCell className="text-right">
+															<div className="flex justify-end gap-2">
+																<Button
+																	type="button"
+																	variant="outline"
+																	size="sm"
+																	onClick={() => openExpenseEditor(expense)}
+																>
+																	Open
+																</Button>
+																{expense.isDraft ? (
+																	<Button
+																		type="button"
+																		size="sm"
+																		onClick={() =>
+																			void publishExpense(expense.id)
+																		}
+																	>
+																		Publish
+																	</Button>
+																) : null}
+																<Button
+																	type="button"
+																	variant="destructive"
+																	size="sm"
+																	onClick={() => void deleteExpense(expense.id)}
+																>
+																	Delete
+																</Button>
+															</div>
+														</TableCell>
+													</TableRow>
+												))
+											)}
+										</TableBody>
+									</Table>
+								</CardContent>
+							</Card>
+						</section>
+					</>
+				) : null}
 			</div>
 
 			<Dialog open={isEditorOpen} onOpenChange={setIsEditorOpen}>

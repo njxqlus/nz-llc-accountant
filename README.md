@@ -6,13 +6,8 @@ Local-only GST expense tracker for a New Zealand LLC, built with Bun, React, Pos
 
 - Drag-and-drop multi-file upload
 - One uploaded file creates one draft expense
-- Temporary DAM assets with a 24-hour TTL
-- Manual draft expenses without attached files
-- Draft publishing that finalizes temporary assets
-- GST period generation from 2025-07-07 onward
 - Filed/unfiled GST period tracking
 - Copyable GST return values for IRD-style filing
-- Shared Docker stack with Postgres, the app, the DAM service, and scheduled backups
 
 ## Environment
 
