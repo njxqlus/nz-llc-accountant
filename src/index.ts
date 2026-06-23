@@ -610,13 +610,20 @@ function normalizeExpenseInput(
 	}
 
 	const record = payload as Record<string, unknown>;
-	const titleValue = record.title ?? fallback?.title ?? "";
+	const hasTitle = Object.hasOwn(record, "title");
+	const hasExpenseDate = Object.hasOwn(record, "expenseDate");
+	const hasAmount = Object.hasOwn(record, "amount");
+	const hasGstEnabled = Object.hasOwn(record, "gstEnabled");
+
+	const titleValue = hasTitle ? record.title : (fallback?.title ?? "");
 	const title =
 		typeof titleValue === "string"
 			? titleValue.trim()
 			: String(titleValue ?? "");
 
-	const rawDate = record.expenseDate ?? fallback?.expenseDate ?? null;
+	const rawDate = hasExpenseDate
+		? record.expenseDate
+		: (fallback?.expenseDate ?? null);
 	let expenseDate: string | null;
 
 	if (rawDate == null || rawDate === "") {
@@ -627,7 +634,7 @@ function normalizeExpenseInput(
 		throw new HttpError(400, "Expense date must be in YYYY-MM-DD format.");
 	}
 
-	const rawAmount = record.amount ?? fallback?.amount ?? null;
+	const rawAmount = hasAmount ? record.amount : (fallback?.amount ?? null);
 	let amount: number | null;
 
 	if (rawAmount == null || rawAmount === "") {
@@ -639,7 +646,7 @@ function normalizeExpenseInput(
 		}
 	}
 
-	const gstValue = record.gstEnabled ?? fallback?.gstEnabled;
+	const gstValue = hasGstEnabled ? record.gstEnabled : fallback?.gstEnabled;
 
 	if (typeof gstValue !== "boolean") {
 		throw new HttpError(400, "gstEnabled must be boolean.");

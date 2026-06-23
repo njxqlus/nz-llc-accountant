@@ -11,7 +11,13 @@ import {
 	RefreshCwIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { useEffect, useEffectEvent, useState, useTransition } from "react";
+import {
+	useEffect,
+	useEffectEvent,
+	useRef,
+	useState,
+	useTransition,
+} from "react";
 import { Toaster, toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -238,6 +244,7 @@ function ReturnValueRow({
 }
 
 export function App() {
+	const uploadInputRef = useRef<HTMLInputElement | null>(null);
 	const [expenses, setExpenses] = useState<Expense[]>([]);
 	const [periods, setPeriods] = useState<GstPeriodSummary[]>([]);
 	const [error, setError] = useState<string | null>(null);
@@ -825,7 +832,7 @@ export function App() {
 										type="button"
 										variant="secondary"
 										disabled={uploading}
-										onClick={(event) => event.preventDefault()}
+										onClick={() => uploadInputRef.current?.click()}
 									>
 										<FolderOpenIcon data-icon="inline-start" />
 										{uploading ? "Uploading…" : "Choose files"}
@@ -833,6 +840,7 @@ export function App() {
 									<Badge variant="outline">One file = one draft</Badge>
 								</div>
 								<input
+									ref={uploadInputRef}
 									className="hidden"
 									type="file"
 									multiple
