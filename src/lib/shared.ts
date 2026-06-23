@@ -141,6 +141,28 @@ export function isIsoDate(value: unknown): value is string {
 	return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+export function normalizeIsoDate(value: string | Date): string {
+	if (value instanceof Date) {
+		if (Number.isNaN(value.getTime())) {
+			throw new Error("Invalid Date object.");
+		}
+
+		return formatIsoDate(value);
+	}
+
+	if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		return value;
+	}
+
+	const prefix = value.slice(0, 10);
+
+	if (/^\d{4}-\d{2}-\d{2}$/.test(prefix)) {
+		return prefix;
+	}
+
+	throw new Error(`Invalid ISO date: ${value}`);
+}
+
 export function generateGstPeriods(
 	today = getTodayInTimezone(),
 	monthsAhead = 12,

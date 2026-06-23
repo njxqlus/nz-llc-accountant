@@ -56,7 +56,7 @@ import type {
 	GstReturnSummary,
 	UploadExpensesResponse,
 } from "@/lib/shared";
-import { calculateGstAmount, roundMoney } from "@/lib/shared";
+import { calculateGstAmount, normalizeIsoDate, roundMoney } from "@/lib/shared";
 import "./index.css";
 
 type EditorState = {
@@ -103,7 +103,8 @@ function expenseToEditor(expense: Expense): EditorState {
 	return {
 		id: expense.id,
 		title: expense.title,
-		expenseDate: expense.expenseDate ?? "",
+		expenseDate:
+			expense.expenseDate == null ? "" : normalizeIsoDate(expense.expenseDate),
 		amount: expense.amount == null ? "" : expense.amount.toFixed(2),
 		gstEnabled: expense.gstEnabled,
 		isDraft: expense.isDraft,
@@ -118,7 +119,7 @@ function formatCurrency(value: number): string {
 }
 
 function formatDate(value: string): string {
-	return dateFormatter.format(new Date(`${value}T00:00:00`));
+	return dateFormatter.format(new Date(`${normalizeIsoDate(value)}T00:00:00`));
 }
 
 function formatDateTime(value: string): string {
@@ -159,7 +160,7 @@ function getRefundTone(value: number): string {
 
 function getExpenseSortValue(expense: Expense): number {
 	const basis = expense.expenseDate
-		? `${expense.expenseDate}T12:00:00`
+		? `${normalizeIsoDate(expense.expenseDate)}T12:00:00`
 		: expense.createdAt;
 	return new Date(basis).getTime();
 }

@@ -11,6 +11,7 @@ import {
 	generateGstPeriods,
 	getTodayInTimezone,
 	isIsoDate,
+	normalizeIsoDate,
 	roundMoney,
 	TEMPORARY_ASSET_TTL_SECONDS,
 	type UploadExpensesResponse,
@@ -683,7 +684,8 @@ function mapExpenseRow(row: ExpenseRow): Expense {
 	return {
 		id: row.id,
 		title: row.title,
-		expenseDate: row.expense_date,
+		expenseDate:
+			row.expense_date == null ? null : normalizeIsoDate(row.expense_date),
 		amount: row.amount == null ? null : Number(row.amount),
 		gstEnabled: row.gst_enabled,
 		gstAmount: Number(row.gst_amount),
