@@ -12,6 +12,7 @@ import {
 	Trash2Icon,
 } from "lucide-react";
 import {
+	useDeferredValue,
 	useEffect,
 	useEffectEvent,
 	useRef,
@@ -253,6 +254,7 @@ export function App() {
 	const [saving, setSaving] = useState(false);
 	const [refreshing, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+	const [expenseSearch, setExpenseSearch] = useState("");
 	const [historyOpen, setHistoryOpen] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -262,6 +264,7 @@ export function App() {
 		null,
 	);
 	const [returnLoading, setReturnLoading] = useState(false);
+	const deferredExpenseSearch = useDeferredValue(expenseSearch);
 
 	const loadDashboard = useEffectEvent(async (showSpinner = false) => {
 		if (showSpinner) {
@@ -293,7 +296,15 @@ export function App() {
 		void loadDashboard(true);
 	}, []);
 
-	const sortedExpenses = [...expenses].sort((left, right) => {
+	const normalizedExpenseSearch = deferredExpenseSearch.trim().toLowerCase();
+	const filteredExpenses =
+		normalizedExpenseSearch.length === 0
+			? expenses
+			: expenses.filter((expense) =>
+					expense.title.toLowerCase().includes(normalizedExpenseSearch),
+				);
+
+	const sortedExpenses = [...filteredExpenses].sort((left, right) => {
 		const leftValue = getExpenseSortValue(left);
 		const rightValue = getExpenseSortValue(right);
 
@@ -822,10 +833,6 @@ export function App() {
 									<p className="text-lg font-semibold">
 										Drop invoices here or choose files
 									</p>
-									<p className="text-sm text-muted-foreground">
-										Supported by the external DAM service through the local SDK
-										integration.
-									</p>
 								</div>
 								<div className="flex flex-wrap justify-center gap-3">
 									<Button
@@ -854,7 +861,7 @@ export function App() {
 							</label>
 							<Button type="button" onClick={openManualExpenseEditor}>
 								<PlusIcon data-icon="inline-start" />
-								Add manual expense
+								Add Expense
 							</Button>
 						</CardContent>
 					</Card>
@@ -871,6 +878,14 @@ export function App() {
 								</CardDescription>
 							</div>
 							<div className="flex flex-wrap gap-3">
+								<Input
+									type="search"
+									value={expenseSearch}
+									onChange={(event) => setExpenseSearch(event.target.value)}
+									placeholder="Search by title"
+									className="w-full sm:w-[220px]"
+									aria-label="Search expenses by title"
+								/>
 								<Select
 									value={sortOrder}
 									onValueChange={(value) => setSortOrder(value as SortOrder)}
@@ -885,14 +900,6 @@ export function App() {
 										</SelectGroup>
 									</SelectContent>
 								</Select>
-								<Button
-									type="button"
-									variant="outline"
-									onClick={openManualExpenseEditor}
-								>
-									<PlusIcon data-icon="inline-start" />
-									Manual expense
-								</Button>
 							</div>
 						</CardHeader>
 						<CardContent>
@@ -919,13 +926,22 @@ export function App() {
 												Loading expenses…
 											</TableCell>
 										</TableRow>
-									) : sortedExpenses.length === 0 ? (
+									) : expenses.length === 0 ? (
 										<TableRow>
 											<TableCell
 												colSpan={8}
 												className="py-10 text-center text-muted-foreground"
 											>
 												No expenses yet. Upload a file or add a manual expense.
+											</TableCell>
+										</TableRow>
+									) : sortedExpenses.length === 0 ? (
+										<TableRow>
+											<TableCell
+												colSpan={8}
+												className="py-10 text-center text-muted-foreground"
+											>
+												No expenses match that title search.
 											</TableCell>
 										</TableRow>
 									) : (
@@ -1041,7 +1057,7 @@ export function App() {
 				<DialogContent className="sm:max-w-2xl">
 					<DialogHeader>
 						<DialogTitle>
-							{editor.id ? "Edit expense" : "Add manual expense"}
+							{editor.id ? "Edit expense" : "Add Expense"}
 						</DialogTitle>
 						<DialogDescription>
 							Publish only when the title, date, and amount are complete.
