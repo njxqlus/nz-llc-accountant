@@ -1,0 +1,27 @@
+@import "../styles/globals.css";
+
+@layer base {
+	:root {
+		color-scheme: light;
+	}
+
+	html {
+		scroll-behavior: smooth;
+	}
+
+	body {
+		min-width: 320px;
+		margin: 0;
+		font-family:
+			"Instrument Sans", "Segoe UI", "Helvetica Neue", Helvetica, sans-serif;
+		text-rendering: optimizeLegibility;
+	}
+
+	#root {
+		min-height: 100vh;
+	}
+
+	::selection {
+		background: color-mix(in oklch, var(--color-primary) 24%, white);
+	}
+}
