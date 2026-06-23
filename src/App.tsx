@@ -64,6 +64,7 @@ import type {
 	UploadExpensesResponse,
 } from "@/lib/shared";
 import { calculateGstAmount, normalizeIsoDate, roundMoney } from "@/lib/shared";
+import { cn } from "@/lib/utils";
 import "./index.css";
 
 type EditorState = {
@@ -151,6 +152,96 @@ function getPeriodStatusLabel(period: GstPeriodSummary): string {
 	}
 
 	return `${period.daysLeft} day${period.daysLeft === 1 ? "" : "s"} left to file`;
+}
+
+function getPeriodActionLabel(period: GstPeriodSummary): string {
+	return period.filed ? "Filed" : "Mark filed";
+}
+
+function GstPeriodCard({
+	period,
+	onOpenReturn,
+	onToggleFiled,
+}: {
+	period: GstPeriodSummary;
+	onOpenReturn: (period: GstPeriodSummary) => void;
+	onToggleFiled: (period: GstPeriodSummary) => void;
+}) {
+	return (
+		<div
+			className={cn(
+				"grid gap-4 rounded-2xl border p-4",
+				period.filed
+					? "border-emerald-200 bg-emerald-50/70"
+					: "border-border/70 bg-[#fbfaf7]",
+			)}
+		>
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div className="flex flex-col gap-2">
+					<div className="flex flex-wrap items-center gap-2">
+						<Badge variant="secondary">GST</Badge>
+						<Badge
+							variant={period.filed ? "default" : "outline"}
+							className={period.filed ? "bg-emerald-700 text-white" : undefined}
+						>
+							{getPeriodStatusLabel(period)}
+						</Badge>
+					</div>
+					<div>
+						<p className="text-lg font-semibold">{formatPeriodRange(period)}</p>
+						<p className="text-sm text-muted-foreground">
+							Due {formatDate(period.dueDate)}
+						</p>
+					</div>
+				</div>
+				<div className="text-left sm:text-right">
+					<p className="text-sm text-muted-foreground">Estimated refund</p>
+					<p
+						className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
+					>
+						{formatCurrency(period.totalGstRefund)}
+					</p>
+				</div>
+			</div>
+			<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+				<div>
+					<p className="font-medium text-foreground">{period.expenseCount}</p>
+					<p>Published expenses</p>
+				</div>
+				<div>
+					<p className="font-medium text-foreground">
+						{formatCurrency(period.totalPurchasesAndExpenses)}
+					</p>
+					<p>Total purchases</p>
+				</div>
+				<div>
+					<p className="font-medium text-foreground">
+						{formatCurrency(period.totalGstPaid)}
+					</p>
+					<p>Total GST paid</p>
+				</div>
+			</div>
+			<div className="flex flex-wrap gap-3">
+				<Button type="button" onClick={() => onOpenReturn(period)}>
+					<ReceiptTextIcon data-icon="inline-start" />
+					Open return
+				</Button>
+				<Button
+					type="button"
+					variant={period.filed ? "default" : "outline"}
+					className={
+						period.filed
+							? "bg-emerald-700 text-white hover:bg-emerald-800"
+							: undefined
+					}
+					onClick={() => onToggleFiled(period)}
+				>
+					<CheckCircle2Icon data-icon="inline-start" />
+					{getPeriodActionLabel(period)}
+				</Button>
+			</div>
+		</div>
+	);
 }
 
 function getRefundTone(value: number): string {
@@ -340,6 +431,22 @@ export function App() {
 		});
 	}
 
+	function updatePeriod(period: GstPeriodSummary, filed: boolean) {
+		setPeriods((currentPeriods) =>
+			currentPeriods.map((entry) =>
+				entry.periodStart === period.periodStart &&
+				entry.periodEnd === period.periodEnd
+					? {
+							...entry,
+							filed,
+							filedAt: filed ? new Date().toISOString() : null,
+							isOverdue: filed ? false : entry.daysLeft < 0,
+						}
+					: entry,
+			),
+		);
+	}
+
 	function openManualExpenseEditor() {
 		setEditor(createBlankEditor());
 		setIsEditorOpen(true);
@@ -487,6 +594,7 @@ export function App() {
 				`/api/gst/periods/${period.periodStart}/${period.periodEnd}/${filed ? "mark-filed" : "unmark-filed"}`,
 				{ method: "POST" },
 			);
+			updatePeriod(period, filed);
 			toast.success(
 				filed ? "Period marked as filed." : "Filed marker removed.",
 			);
@@ -595,85 +703,19 @@ export function App() {
 								</p>
 							) : (
 								visiblePeriods.map((period) => (
-									<div
+									<GstPeriodCard
 										key={`${period.periodStart}-${period.periodEnd}`}
-										className="grid gap-4 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4"
-									>
-										<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-											<div className="flex flex-col gap-2">
-												<div className="flex flex-wrap items-center gap-2">
-													<Badge variant="secondary">GST</Badge>
-													<Badge
-														variant={period.filed ? "default" : "outline"}
-														className={
-															period.filed
-																? "bg-emerald-700 text-white"
-																: undefined
-														}
-													>
-														{getPeriodStatusLabel(period)}
-													</Badge>
-												</div>
-												<div>
-													<p className="text-lg font-semibold">
-														{formatPeriodRange(period)}
-													</p>
-													<p className="text-sm text-muted-foreground">
-														Due {formatDate(period.dueDate)}
-													</p>
-												</div>
-											</div>
-											<div className="text-left sm:text-right">
-												<p className="text-sm text-muted-foreground">
-													Estimated refund
-												</p>
-												<p
-													className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
-												>
-													{formatCurrency(period.totalGstRefund)}
-												</p>
-											</div>
-										</div>
-										<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-											<div>
-												<p className="font-medium text-foreground">
-													{period.expenseCount}
-												</p>
-												<p>Published expenses</p>
-											</div>
-											<div>
-												<p className="font-medium text-foreground">
-													{formatCurrency(period.totalPurchasesAndExpenses)}
-												</p>
-												<p>Total purchases</p>
-											</div>
-											<div>
-												<p className="font-medium text-foreground">
-													{formatCurrency(period.totalGstPaid)}
-												</p>
-												<p>Total GST paid</p>
-											</div>
-										</div>
-										<div className="flex flex-wrap gap-3">
-											<Button
-												type="button"
-												onClick={() => void loadReturnSummary(period)}
-											>
-												<ReceiptTextIcon data-icon="inline-start" />
-												Open return
-											</Button>
-											<Button
-												type="button"
-												variant="outline"
-												onClick={() =>
-													void togglePeriodFiled(period, !period.filed)
-												}
-											>
-												<CheckCircle2Icon data-icon="inline-start" />
-												{period.filed ? "Unmark filed" : "Mark filed"}
-											</Button>
-										</div>
-									</div>
+										period={period}
+										onOpenReturn={(selectedPeriod) =>
+											void loadReturnSummary(selectedPeriod)
+										}
+										onToggleFiled={(selectedPeriod) =>
+											void togglePeriodFiled(
+												selectedPeriod,
+												!selectedPeriod.filed,
+											)
+										}
+									/>
 								))
 							)}
 							{!loading && historyPeriods.length > 0 ? (
@@ -698,87 +740,19 @@ export function App() {
 									{historyOpen ? (
 										<div className="grid gap-4 border-t border-border/70 p-4">
 											{historyPeriods.map((period) => (
-												<div
+												<GstPeriodCard
 													key={`${period.periodStart}-${period.periodEnd}`}
-													className="grid gap-4 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4"
-												>
-													<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-														<div className="flex flex-col gap-2">
-															<div className="flex flex-wrap items-center gap-2">
-																<Badge variant="secondary">GST</Badge>
-																<Badge
-																	variant={period.filed ? "default" : "outline"}
-																	className={
-																		period.filed
-																			? "bg-emerald-700 text-white"
-																			: undefined
-																	}
-																>
-																	{getPeriodStatusLabel(period)}
-																</Badge>
-															</div>
-															<div>
-																<p className="text-lg font-semibold">
-																	{formatPeriodRange(period)}
-																</p>
-																<p className="text-sm text-muted-foreground">
-																	Due {formatDate(period.dueDate)}
-																</p>
-															</div>
-														</div>
-														<div className="text-left sm:text-right">
-															<p className="text-sm text-muted-foreground">
-																Estimated refund
-															</p>
-															<p
-																className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
-															>
-																{formatCurrency(period.totalGstRefund)}
-															</p>
-														</div>
-													</div>
-													<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-														<div>
-															<p className="font-medium text-foreground">
-																{period.expenseCount}
-															</p>
-															<p>Published expenses</p>
-														</div>
-														<div>
-															<p className="font-medium text-foreground">
-																{formatCurrency(
-																	period.totalPurchasesAndExpenses,
-																)}
-															</p>
-															<p>Total purchases</p>
-														</div>
-														<div>
-															<p className="font-medium text-foreground">
-																{formatCurrency(period.totalGstPaid)}
-															</p>
-															<p>Total GST paid</p>
-														</div>
-													</div>
-													<div className="flex flex-wrap gap-3">
-														<Button
-															type="button"
-															onClick={() => void loadReturnSummary(period)}
-														>
-															<ReceiptTextIcon data-icon="inline-start" />
-															Open return
-														</Button>
-														<Button
-															type="button"
-															variant="outline"
-															onClick={() =>
-																void togglePeriodFiled(period, !period.filed)
-															}
-														>
-															<CheckCircle2Icon data-icon="inline-start" />
-															{period.filed ? "Unmark filed" : "Mark filed"}
-														</Button>
-													</div>
-												</div>
+													period={period}
+													onOpenReturn={(selectedPeriod) =>
+														void loadReturnSummary(selectedPeriod)
+													}
+													onToggleFiled={(selectedPeriod) =>
+														void togglePeriodFiled(
+															selectedPeriod,
+															!selectedPeriod.filed,
+														)
+													}
+												/>
 											))}
 										</div>
 									) : null}

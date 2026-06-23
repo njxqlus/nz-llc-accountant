@@ -34,8 +34,8 @@ type ExpenseRow = {
 
 type GstPeriodFilingRow = {
 	id: string;
-	period_start: string;
-	period_end: string;
+	period_start: string | Date;
+	period_end: string | Date;
 	filed: boolean;
 	filed_at: string | null;
 	created_at: string;
@@ -708,8 +708,8 @@ function mapExpenseRow(row: ExpenseRow): Expense {
 function mapPeriodFilingRow(row: GstPeriodFilingRow): GstPeriodFiling {
 	return {
 		id: row.id,
-		periodStart: row.period_start,
-		periodEnd: row.period_end,
+		periodStart: normalizeIsoDate(row.period_start),
+		periodEnd: normalizeIsoDate(row.period_end),
 		filed: row.filed,
 		filedAt: row.filed_at ? new Date(row.filed_at).toISOString() : null,
 		createdAt: new Date(row.created_at).toISOString(),
