@@ -324,12 +324,14 @@ export function App() {
 	].filter((period): period is GstPeriodSummary => period != null);
 	const historyPeriods =
 		currentPeriodIndex > 0
-			? periods.slice(
-					0,
-					previousPeriod && !previousPeriod.filed
-						? currentPeriodIndex - 1
-						: currentPeriodIndex,
-				)
+			? periods
+					.slice(
+						0,
+						previousPeriod && !previousPeriod.filed
+							? currentPeriodIndex - 1
+							: currentPeriodIndex,
+					)
+					.reverse()
 			: [];
 
 	function refreshDashboard() {
