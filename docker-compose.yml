@@ -5,21 +5,116 @@ services:
       POSTGRES_DB: nz_llc_accountant
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nz_llc_accountant"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
 
+  jean-claude-bun-dam:
+    build:
+      context: https://github.com/njxqlus/jean-claude-bun-dam.git#main:service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      PORT: 3200
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/media_assets
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-false}
+      S3_PREFIX: ${S3_PREFIX:-media-assets}
+      MAX_UPLOAD_BYTES: 52428800
+      CLEANUP_INTERVAL_SECONDS: 300
+      WORKER_POLL_INTERVAL_MS: 2000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const response = await fetch('http://127.0.0.1:3200/assets?limit=1'); if (!response.ok) process.exit(1);",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
   app:
     build:
       context: .
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      jean-claude-bun-dam:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/nz_llc_accountant
-      JEAN_CLAUDE_BUN_DAM_SERVER_URL: ${JEAN_CLAUDE_BUN_DAM_SERVER_URL}
+      JEAN_CLAUDE_BUN_DAM_SERVER_URL: http://jean-claude-bun-dam:3200
       HOST: 0.0.0.0
       PORT: 3000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const response = await fetch('http://127.0.0.1:3000/'); if (!response.ok) process.exit(1);",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3401:3000"
+
+  backup:
+    build:
+      context: .
+      dockerfile: docker/backup/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jean-claude-bun-dam:
+        condition: service_healthy
+    environment:
+      TZ: Pacific/Auckland
+      BACKUP_SCHEDULE_HOUR: ${BACKUP_SCHEDULE_HOUR:-22}
+      BACKUP_SCHEDULE_MINUTE: ${BACKUP_SCHEDULE_MINUTE:-00}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      APP_DB_NAME: nz_llc_accountant
+      DAM_DB_NAME: media_assets
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD}
+      RESTIC_KEEP_LAST: ${RESTIC_KEEP_LAST:-1}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-auto}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-nz-llc-accountant}
+      AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-auto}
+      RCLONE_CONFIG_MEDIA_TYPE: s3
+      RCLONE_CONFIG_MEDIA_PROVIDER: Other
+      RCLONE_CONFIG_MEDIA_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      RCLONE_CONFIG_MEDIA_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      RCLONE_CONFIG_MEDIA_ENDPOINT: ${S3_ENDPOINT}
+      DAM_S3_BUCKET: ${S3_BUCKET}
+      DAM_S3_PREFIX: ${S3_PREFIX:-media-assets}
+      RESTORE_ROOT: /restore
+    volumes:
+      - ./restore:/restore
+      - backup_state:/var/lib/backup
 
 volumes:
   postgres_data:
+  backup_state:
