@@ -8,10 +8,10 @@ import {
 	FolderOpenIcon,
 	PlusIcon,
 	ReceiptTextIcon,
-	RefreshCwIcon,
 	Trash2Icon,
 } from "lucide-react";
 import {
+	useDeferredValue,
 	useEffect,
 	useEffectEvent,
 	useRef,
@@ -63,6 +63,7 @@ import type {
 	UploadExpensesResponse,
 } from "@/lib/shared";
 import { calculateGstAmount, normalizeIsoDate, roundMoney } from "@/lib/shared";
+import { cn } from "@/lib/utils";
 import "./index.css";
 
 type EditorState = {
@@ -150,6 +151,105 @@ function getPeriodStatusLabel(period: GstPeriodSummary): string {
 	}
 
 	return `${period.daysLeft} day${period.daysLeft === 1 ? "" : "s"} left to file`;
+}
+
+function getPeriodActionLabel(period: GstPeriodSummary): string {
+	return period.filed ? "Filed" : "Mark filed";
+}
+
+function GstPeriodCard({
+	period,
+	onFilterExpenses,
+	onOpenReturn,
+	onToggleFiled,
+}: {
+	period: GstPeriodSummary;
+	onFilterExpenses: (period: GstPeriodSummary) => void;
+	onOpenReturn: (period: GstPeriodSummary) => void;
+	onToggleFiled: (period: GstPeriodSummary) => void;
+}) {
+	return (
+		<div
+			className={cn(
+				"grid gap-4 rounded-2xl border p-4",
+				period.filed
+					? "border-emerald-200 bg-emerald-50/70"
+					: "border-border/70 bg-[#fbfaf7]",
+			)}
+		>
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div className="flex flex-col gap-2">
+					<div className="flex flex-wrap items-center gap-2">
+						<Badge variant="secondary">GST</Badge>
+						<Badge
+							variant={period.filed ? "default" : "outline"}
+							className={period.filed ? "bg-emerald-700 text-white" : undefined}
+						>
+							{getPeriodStatusLabel(period)}
+						</Badge>
+					</div>
+					<div>
+						<p className="text-lg font-semibold">{formatPeriodRange(period)}</p>
+						<p className="text-sm text-muted-foreground">
+							Due {formatDate(period.dueDate)}
+						</p>
+					</div>
+				</div>
+				<div className="text-left sm:text-right">
+					<p className="text-sm text-muted-foreground">Estimated refund</p>
+					<p
+						className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
+					>
+						{formatCurrency(period.totalGstRefund)}
+					</p>
+				</div>
+			</div>
+			<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+				<div>
+					<p className="font-medium text-foreground">{period.expenseCount}</p>
+					<p>Published expenses</p>
+				</div>
+				<div>
+					<p className="font-medium text-foreground">
+						{formatCurrency(period.totalPurchasesAndExpenses)}
+					</p>
+					<p>Total purchases</p>
+				</div>
+				<div>
+					<p className="font-medium text-foreground">
+						{formatCurrency(period.totalGstPaid)}
+					</p>
+					<p>Total GST paid</p>
+				</div>
+			</div>
+			<div className="flex flex-wrap gap-3">
+				<Button
+					type="button"
+					variant="outline"
+					onClick={() => onFilterExpenses(period)}
+				>
+					Filter expenses
+				</Button>
+				<Button type="button" onClick={() => onOpenReturn(period)}>
+					<ReceiptTextIcon data-icon="inline-start" />
+					Open return
+				</Button>
+				<Button
+					type="button"
+					variant={period.filed ? "default" : "outline"}
+					className={
+						period.filed
+							? "bg-emerald-700 text-white hover:bg-emerald-800"
+							: undefined
+					}
+					onClick={() => onToggleFiled(period)}
+				>
+					<CheckCircle2Icon data-icon="inline-start" />
+					{getPeriodActionLabel(period)}
+				</Button>
+			</div>
+		</div>
+	);
 }
 
 function getRefundTone(value: number): string {
@@ -245,14 +345,18 @@ function ReturnValueRow({
 
 export function App() {
 	const uploadInputRef = useRef<HTMLInputElement | null>(null);
+	const expensesSectionRef = useRef<HTMLElement | null>(null);
 	const [expenses, setExpenses] = useState<Expense[]>([]);
 	const [periods, setPeriods] = useState<GstPeriodSummary[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [uploading, setUploading] = useState(false);
 	const [saving, setSaving] = useState(false);
-	const [refreshing, startRefreshTransition] = useTransition();
+	const [, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+	const [expenseSearch, setExpenseSearch] = useState("");
+	const [expenseDateFrom, setExpenseDateFrom] = useState("");
+	const [expenseDateTo, setExpenseDateTo] = useState("");
 	const [historyOpen, setHistoryOpen] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -262,6 +366,7 @@ export function App() {
 		null,
 	);
 	const [returnLoading, setReturnLoading] = useState(false);
+	const deferredExpenseSearch = useDeferredValue(expenseSearch);
 
 	const loadDashboard = useEffectEvent(async (showSpinner = false) => {
 		if (showSpinner) {
@@ -293,7 +398,22 @@ export function App() {
 		void loadDashboard(true);
 	}, []);
 
-	const sortedExpenses = [...expenses].sort((left, right) => {
+	const normalizedExpenseSearch = deferredExpenseSearch.trim().toLowerCase();
+	const filteredExpenses = expenses.filter((expense) => {
+		const matchesSearch =
+			normalizedExpenseSearch.length === 0 ||
+			expense.title.toLowerCase().includes(normalizedExpenseSearch);
+		const matchesDateFrom =
+			expenseDateFrom.length === 0 ||
+			(expense.expenseDate != null && expense.expenseDate >= expenseDateFrom);
+		const matchesDateTo =
+			expenseDateTo.length === 0 ||
+			(expense.expenseDate != null && expense.expenseDate <= expenseDateTo);
+
+		return matchesSearch && matchesDateFrom && matchesDateTo;
+	});
+
+	const sortedExpenses = [...filteredExpenses].sort((left, right) => {
 		const leftValue = getExpenseSortValue(left);
 		const rightValue = getExpenseSortValue(right);
 
@@ -313,18 +433,51 @@ export function App() {
 	].filter((period): period is GstPeriodSummary => period != null);
 	const historyPeriods =
 		currentPeriodIndex > 0
-			? periods.slice(
-					0,
-					previousPeriod && !previousPeriod.filed
-						? currentPeriodIndex - 1
-						: currentPeriodIndex,
-				)
+			? periods
+					.slice(
+						0,
+						previousPeriod && !previousPeriod.filed
+							? currentPeriodIndex - 1
+							: currentPeriodIndex,
+					)
+					.reverse()
 			: [];
 
 	function refreshDashboard() {
 		startRefreshTransition(() => {
 			void loadDashboard();
 		});
+	}
+
+	function applyExpenseDateFilter(dateFrom: string, dateTo: string) {
+		setExpenseDateFrom(dateFrom);
+		setExpenseDateTo(dateTo);
+		expensesSectionRef.current?.scrollIntoView({
+			behavior: "smooth",
+			block: "start",
+		});
+	}
+
+	function clearExpenseFilters() {
+		setExpenseSearch("");
+		setExpenseDateFrom("");
+		setExpenseDateTo("");
+	}
+
+	function updatePeriod(period: GstPeriodSummary, filed: boolean) {
+		setPeriods((currentPeriods) =>
+			currentPeriods.map((entry) =>
+				entry.periodStart === period.periodStart &&
+				entry.periodEnd === period.periodEnd
+					? {
+							...entry,
+							filed,
+							filedAt: filed ? new Date().toISOString() : null,
+							isOverdue: filed ? false : entry.daysLeft < 0,
+						}
+					: entry,
+			),
+		);
 	}
 
 	function openManualExpenseEditor() {
@@ -474,6 +627,7 @@ export function App() {
 				`/api/gst/periods/${period.periodStart}/${period.periodEnd}/${filed ? "mark-filed" : "unmark-filed"}`,
 				{ method: "POST" },
 			);
+			updatePeriod(period, filed);
 			toast.success(
 				filed ? "Period marked as filed." : "Filed marker removed.",
 			);
@@ -559,17 +713,6 @@ export function App() {
 									Current GST work, with older periods available in history.
 								</CardDescription>
 							</div>
-							<div className="flex flex-wrap gap-3">
-								<Button
-									type="button"
-									variant="outline"
-									onClick={refreshDashboard}
-									disabled={refreshing}
-								>
-									<RefreshCwIcon data-icon="inline-start" />
-									Refresh
-								</Button>
-							</div>
 						</CardHeader>
 						<CardContent className="grid gap-4">
 							{loading ? (
@@ -582,85 +725,25 @@ export function App() {
 								</p>
 							) : (
 								visiblePeriods.map((period) => (
-									<div
+									<GstPeriodCard
 										key={`${period.periodStart}-${period.periodEnd}`}
-										className="grid gap-4 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4"
-									>
-										<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-											<div className="flex flex-col gap-2">
-												<div className="flex flex-wrap items-center gap-2">
-													<Badge variant="secondary">GST</Badge>
-													<Badge
-														variant={period.filed ? "default" : "outline"}
-														className={
-															period.filed
-																? "bg-emerald-700 text-white"
-																: undefined
-														}
-													>
-														{getPeriodStatusLabel(period)}
-													</Badge>
-												</div>
-												<div>
-													<p className="text-lg font-semibold">
-														{formatPeriodRange(period)}
-													</p>
-													<p className="text-sm text-muted-foreground">
-														Due {formatDate(period.dueDate)}
-													</p>
-												</div>
-											</div>
-											<div className="text-left sm:text-right">
-												<p className="text-sm text-muted-foreground">
-													Estimated refund
-												</p>
-												<p
-													className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
-												>
-													{formatCurrency(period.totalGstRefund)}
-												</p>
-											</div>
-										</div>
-										<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-											<div>
-												<p className="font-medium text-foreground">
-													{period.expenseCount}
-												</p>
-												<p>Published expenses</p>
-											</div>
-											<div>
-												<p className="font-medium text-foreground">
-													{formatCurrency(period.totalPurchasesAndExpenses)}
-												</p>
-												<p>Total purchases</p>
-											</div>
-											<div>
-												<p className="font-medium text-foreground">
-													{formatCurrency(period.totalGstPaid)}
-												</p>
-												<p>Total GST paid</p>
-											</div>
-										</div>
-										<div className="flex flex-wrap gap-3">
-											<Button
-												type="button"
-												onClick={() => void loadReturnSummary(period)}
-											>
-												<ReceiptTextIcon data-icon="inline-start" />
-												Open return
-											</Button>
-											<Button
-												type="button"
-												variant="outline"
-												onClick={() =>
-													void togglePeriodFiled(period, !period.filed)
-												}
-											>
-												<CheckCircle2Icon data-icon="inline-start" />
-												{period.filed ? "Unmark filed" : "Mark filed"}
-											</Button>
-										</div>
-									</div>
+										period={period}
+										onFilterExpenses={(selectedPeriod) =>
+											applyExpenseDateFilter(
+												selectedPeriod.periodStart,
+												selectedPeriod.periodEnd,
+											)
+										}
+										onOpenReturn={(selectedPeriod) =>
+											void loadReturnSummary(selectedPeriod)
+										}
+										onToggleFiled={(selectedPeriod) =>
+											void togglePeriodFiled(
+												selectedPeriod,
+												!selectedPeriod.filed,
+											)
+										}
+									/>
 								))
 							)}
 							{!loading && historyPeriods.length > 0 ? (
@@ -685,87 +768,25 @@ export function App() {
 									{historyOpen ? (
 										<div className="grid gap-4 border-t border-border/70 p-4">
 											{historyPeriods.map((period) => (
-												<div
+												<GstPeriodCard
 													key={`${period.periodStart}-${period.periodEnd}`}
-													className="grid gap-4 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4"
-												>
-													<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-														<div className="flex flex-col gap-2">
-															<div className="flex flex-wrap items-center gap-2">
-																<Badge variant="secondary">GST</Badge>
-																<Badge
-																	variant={period.filed ? "default" : "outline"}
-																	className={
-																		period.filed
-																			? "bg-emerald-700 text-white"
-																			: undefined
-																	}
-																>
-																	{getPeriodStatusLabel(period)}
-																</Badge>
-															</div>
-															<div>
-																<p className="text-lg font-semibold">
-																	{formatPeriodRange(period)}
-																</p>
-																<p className="text-sm text-muted-foreground">
-																	Due {formatDate(period.dueDate)}
-																</p>
-															</div>
-														</div>
-														<div className="text-left sm:text-right">
-															<p className="text-sm text-muted-foreground">
-																Estimated refund
-															</p>
-															<p
-																className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
-															>
-																{formatCurrency(period.totalGstRefund)}
-															</p>
-														</div>
-													</div>
-													<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-														<div>
-															<p className="font-medium text-foreground">
-																{period.expenseCount}
-															</p>
-															<p>Published expenses</p>
-														</div>
-														<div>
-															<p className="font-medium text-foreground">
-																{formatCurrency(
-																	period.totalPurchasesAndExpenses,
-																)}
-															</p>
-															<p>Total purchases</p>
-														</div>
-														<div>
-															<p className="font-medium text-foreground">
-																{formatCurrency(period.totalGstPaid)}
-															</p>
-															<p>Total GST paid</p>
-														</div>
-													</div>
-													<div className="flex flex-wrap gap-3">
-														<Button
-															type="button"
-															onClick={() => void loadReturnSummary(period)}
-														>
-															<ReceiptTextIcon data-icon="inline-start" />
-															Open return
-														</Button>
-														<Button
-															type="button"
-															variant="outline"
-															onClick={() =>
-																void togglePeriodFiled(period, !period.filed)
-															}
-														>
-															<CheckCircle2Icon data-icon="inline-start" />
-															{period.filed ? "Unmark filed" : "Mark filed"}
-														</Button>
-													</div>
-												</div>
+													period={period}
+													onFilterExpenses={(selectedPeriod) =>
+														applyExpenseDateFilter(
+															selectedPeriod.periodStart,
+															selectedPeriod.periodEnd,
+														)
+													}
+													onOpenReturn={(selectedPeriod) =>
+														void loadReturnSummary(selectedPeriod)
+													}
+													onToggleFiled={(selectedPeriod) =>
+														void togglePeriodFiled(
+															selectedPeriod,
+															!selectedPeriod.filed,
+														)
+													}
+												/>
 											))}
 										</div>
 									) : null}
@@ -822,10 +843,6 @@ export function App() {
 									<p className="text-lg font-semibold">
 										Drop invoices here or choose files
 									</p>
-									<p className="text-sm text-muted-foreground">
-										Supported by the external DAM service through the local SDK
-										integration.
-									</p>
 								</div>
 								<div className="flex flex-wrap justify-center gap-3">
 									<Button
@@ -854,15 +871,15 @@ export function App() {
 							</label>
 							<Button type="button" onClick={openManualExpenseEditor}>
 								<PlusIcon data-icon="inline-start" />
-								Add manual expense
+								Add Expense
 							</Button>
 						</CardContent>
 					</Card>
 				</section>
 
-				<section>
+				<section ref={expensesSectionRef}>
 					<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
-						<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+						<CardHeader className="flex flex-col gap-4">
 							<div className="flex flex-col gap-1">
 								<CardTitle>Expenses</CardTitle>
 								<CardDescription>
@@ -871,6 +888,28 @@ export function App() {
 								</CardDescription>
 							</div>
 							<div className="flex flex-wrap gap-3">
+								<Input
+									type="search"
+									value={expenseSearch}
+									onChange={(event) => setExpenseSearch(event.target.value)}
+									placeholder="Search by title"
+									className="w-full sm:w-[220px]"
+									aria-label="Search expenses by title"
+								/>
+								<Input
+									type="date"
+									value={expenseDateFrom}
+									onChange={(event) => setExpenseDateFrom(event.target.value)}
+									className="w-full sm:w-[170px]"
+									aria-label="Filter expenses from date"
+								/>
+								<Input
+									type="date"
+									value={expenseDateTo}
+									onChange={(event) => setExpenseDateTo(event.target.value)}
+									className="w-full sm:w-[170px]"
+									aria-label="Filter expenses to date"
+								/>
 								<Select
 									value={sortOrder}
 									onValueChange={(value) => setSortOrder(value as SortOrder)}
@@ -888,10 +927,9 @@ export function App() {
 								<Button
 									type="button"
 									variant="outline"
-									onClick={openManualExpenseEditor}
+									onClick={clearExpenseFilters}
 								>
-									<PlusIcon data-icon="inline-start" />
-									Manual expense
+									Clear filters
 								</Button>
 							</div>
 						</CardHeader>
@@ -919,13 +957,22 @@ export function App() {
 												Loading expenses…
 											</TableCell>
 										</TableRow>
-									) : sortedExpenses.length === 0 ? (
+									) : expenses.length === 0 ? (
 										<TableRow>
 											<TableCell
 												colSpan={8}
 												className="py-10 text-center text-muted-foreground"
 											>
 												No expenses yet. Upload a file or add a manual expense.
+											</TableCell>
+										</TableRow>
+									) : sortedExpenses.length === 0 ? (
+										<TableRow>
+											<TableCell
+												colSpan={8}
+												className="py-10 text-center text-muted-foreground"
+											>
+												No expenses match the active filters.
 											</TableCell>
 										</TableRow>
 									) : (
@@ -1041,7 +1088,7 @@ export function App() {
 				<DialogContent className="sm:max-w-2xl">
 					<DialogHeader>
 						<DialogTitle>
-							{editor.id ? "Edit expense" : "Add manual expense"}
+							{editor.id ? "Edit expense" : "Add Expense"}
 						</DialogTitle>
 						<DialogDescription>
 							Publish only when the title, date, and amount are complete.
