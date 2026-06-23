@@ -1,6 +1,7 @@
 import {
 	AlertCircleIcon,
 	CheckCircle2Icon,
+	ChevronDownIcon,
 	CircleDashedIcon,
 	CopyIcon,
 	FileUpIcon,
@@ -71,8 +72,6 @@ type EditorState = {
 };
 
 type SortOrder = "newest" | "oldest";
-type PeriodView = "current" | "history";
-
 const currencyFormatter = new Intl.NumberFormat("en-NZ", {
 	style: "currency",
 	currency: "NZD",
@@ -190,30 +189,6 @@ async function copyValue(label: string, value: string) {
 	toast.success(`${label} copied`);
 }
 
-function StatCard({
-	title,
-	value,
-	description,
-}: {
-	title: string;
-	value: string;
-	description: string;
-}) {
-	return (
-		<Card className="border-white/60 bg-white/90 shadow-sm backdrop-blur">
-			<CardHeader className="gap-1 pb-2">
-				<CardDescription>{title}</CardDescription>
-				<CardTitle className="text-2xl font-semibold tracking-tight">
-					{value}
-				</CardTitle>
-			</CardHeader>
-			<CardContent>
-				<p className="text-sm text-muted-foreground">{description}</p>
-			</CardContent>
-		</Card>
-	);
-}
-
 function ReturnValueRow({
 	label,
 	value,
@@ -253,7 +228,7 @@ export function App() {
 	const [saving, setSaving] = useState(false);
 	const [refreshing, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
-	const [periodView, setPeriodView] = useState<PeriodView>("current");
+	const [historyOpen, setHistoryOpen] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isEditorOpen, setIsEditorOpen] = useState(false);
 	const [editor, setEditor] = useState<EditorState>(createBlankEditor);
@@ -302,18 +277,24 @@ export function App() {
 			: leftValue - rightValue;
 	});
 
-	const visiblePeriods = periods.filter((period) => {
-		return periodView === "current"
-			? period.isCurrent || period.isUpcoming
-			: !period.isCurrent && !period.isUpcoming;
-	});
-
-	const draftCount = expenses.filter((expense) => expense.isDraft).length;
-	const publishedCount = expenses.length - draftCount;
-	const currentPeriod = periods.find((period) => period.isCurrent);
-	const nextDuePeriod = periods.find(
-		(period) => !period.filed && period.daysLeft >= 0,
-	);
+	const currentPeriodIndex = periods.findIndex((period) => period.isCurrent);
+	const currentPeriod =
+		currentPeriodIndex >= 0 ? periods[currentPeriodIndex] : undefined;
+	const previousPeriod =
+		currentPeriodIndex > 0 ? periods[currentPeriodIndex - 1] : undefined;
+	const visiblePeriods = [
+		previousPeriod && !previousPeriod.filed ? previousPeriod : undefined,
+		currentPeriod,
+	].filter((period): period is GstPeriodSummary => period != null);
+	const historyPeriods =
+		currentPeriodIndex > 0
+			? periods.slice(
+					0,
+					previousPeriod && !previousPeriod.filed
+						? currentPeriodIndex - 1
+						: currentPeriodIndex,
+				)
+			: [];
 
 	function refreshDashboard() {
 		startRefreshTransition(() => {
@@ -519,76 +500,6 @@ export function App() {
 		<div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.72),transparent_36%),linear-gradient(180deg,#f5f1e8_0%,#efe7d8_46%,#ece4d6_100%)] text-foreground">
 			<Toaster richColors position="top-right" />
 			<div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-				<section className="grid gap-6 rounded-[2rem] border border-white/60 bg-[#1e1f1b] px-6 py-8 text-stone-100 shadow-[0_28px_80px_rgba(60,41,11,0.18)] sm:px-8 lg:grid-cols-[1.5fr_1fr]">
-					<div className="flex flex-col gap-4">
-						<Badge className="w-fit bg-amber-200 text-amber-950 hover:bg-amber-200">
-							Local-only GST tracker
-						</Badge>
-						<div className="flex flex-col gap-3">
-							<h1 className="max-w-2xl font-[Iowan_Old_Style,Palatino_Linotype,Book_Antiqua,Georgia,serif] text-4xl leading-tight tracking-tight sm:text-5xl">
-								New Zealand GST evidence, drafts, and return periods in one
-								place.
-							</h1>
-							<p className="max-w-2xl text-base text-stone-300 sm:text-lg">
-								Upload invoice files as temporary assets, finish the details
-								later, then publish only when the expense is ready for GST
-								returns.
-							</p>
-						</div>
-						<div className="flex flex-wrap gap-3 text-sm text-stone-300">
-							<div className="rounded-full border border-stone-700 px-4 py-2">
-								Drafts excluded from GST
-							</div>
-							<div className="rounded-full border border-stone-700 px-4 py-2">
-								24-hour temporary upload TTL
-							</div>
-							<div className="rounded-full border border-stone-700 px-4 py-2">
-								2-monthly odd-month filing
-							</div>
-						</div>
-					</div>
-					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
-						<StatCard
-							title="Current refund"
-							value={formatCurrency(currentPeriod?.totalGstRefund ?? 0)}
-							description={
-								currentPeriod
-									? `For ${formatPeriodRange(currentPeriod)}`
-									: "No current GST period found."
-							}
-						/>
-						<StatCard
-							title="Next due"
-							value={
-								nextDuePeriod ? formatDate(nextDuePeriod.dueDate) : "Filed"
-							}
-							description={
-								nextDuePeriod
-									? getPeriodStatusLabel(nextDuePeriod)
-									: "All visible periods are currently marked filed."
-							}
-						/>
-					</div>
-				</section>
-
-				<section className="grid gap-4 sm:grid-cols-3">
-					<StatCard
-						title="Draft expenses"
-						value={String(draftCount)}
-						description="Drafts can stay incomplete until publish time."
-					/>
-					<StatCard
-						title="Published expenses"
-						value={String(publishedCount)}
-						description="Published entries feed GST period calculations."
-					/>
-					<StatCard
-						title="Tracked expenses"
-						value={String(expenses.length)}
-						description="Manual and uploaded records stored locally in Postgres."
-					/>
-				</section>
-
 				{error ? (
 					<Alert variant="destructive">
 						<AlertCircleIcon />
@@ -603,26 +514,10 @@ export function App() {
 							<div className="flex flex-col gap-1">
 								<CardTitle>GST periods</CardTitle>
 								<CardDescription>
-									Current and historical two-month GST periods from 7 July 2025.
+									Current GST work, with older periods available in history.
 								</CardDescription>
 							</div>
 							<div className="flex flex-wrap gap-3">
-								<Select
-									value={periodView}
-									onValueChange={(value) => setPeriodView(value as PeriodView)}
-								>
-									<SelectTrigger className="w-[180px]">
-										<SelectValue placeholder="Period view" />
-									</SelectTrigger>
-									<SelectContent align="end">
-										<SelectGroup>
-											<SelectItem value="current">
-												Current and upcoming
-											</SelectItem>
-											<SelectItem value="history">History</SelectItem>
-										</SelectGroup>
-									</SelectContent>
-								</Select>
 								<Button
 									type="button"
 									variant="outline"
@@ -641,7 +536,7 @@ export function App() {
 								</p>
 							) : visiblePeriods.length === 0 ? (
 								<p className="text-sm text-muted-foreground">
-									No periods match the current view.
+									No GST periods available.
 								</p>
 							) : (
 								visiblePeriods.map((period) => (
@@ -726,6 +621,114 @@ export function App() {
 									</div>
 								))
 							)}
+							{!loading && historyPeriods.length > 0 ? (
+								<div className="rounded-2xl border border-border/70 bg-white/70">
+									<button
+										type="button"
+										onClick={() => setHistoryOpen((open) => !open)}
+										className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left"
+									>
+										<div>
+											<p className="font-medium text-foreground">History</p>
+											<p className="text-sm text-muted-foreground">
+												All previous GST periods from registration start.
+											</p>
+										</div>
+										<ChevronDownIcon
+											className={`size-4 shrink-0 text-muted-foreground transition-transform ${
+												historyOpen ? "rotate-180" : ""
+											}`}
+										/>
+									</button>
+									{historyOpen ? (
+										<div className="grid gap-4 border-t border-border/70 p-4">
+											{historyPeriods.map((period) => (
+												<div
+													key={`${period.periodStart}-${period.periodEnd}`}
+													className="grid gap-4 rounded-2xl border border-border/70 bg-[#fbfaf7] p-4"
+												>
+													<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+														<div className="flex flex-col gap-2">
+															<div className="flex flex-wrap items-center gap-2">
+																<Badge variant="secondary">GST</Badge>
+																<Badge
+																	variant={period.filed ? "default" : "outline"}
+																	className={
+																		period.filed
+																			? "bg-emerald-700 text-white"
+																			: undefined
+																	}
+																>
+																	{getPeriodStatusLabel(period)}
+																</Badge>
+															</div>
+															<div>
+																<p className="text-lg font-semibold">
+																	{formatPeriodRange(period)}
+																</p>
+																<p className="text-sm text-muted-foreground">
+																	Due {formatDate(period.dueDate)}
+																</p>
+															</div>
+														</div>
+														<div className="text-left sm:text-right">
+															<p className="text-sm text-muted-foreground">
+																Estimated refund
+															</p>
+															<p
+																className={`text-xl font-semibold ${getRefundTone(period.totalGstRefund)}`}
+															>
+																{formatCurrency(period.totalGstRefund)}
+															</p>
+														</div>
+													</div>
+													<div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+														<div>
+															<p className="font-medium text-foreground">
+																{period.expenseCount}
+															</p>
+															<p>Published expenses</p>
+														</div>
+														<div>
+															<p className="font-medium text-foreground">
+																{formatCurrency(
+																	period.totalPurchasesAndExpenses,
+																)}
+															</p>
+															<p>Total purchases</p>
+														</div>
+														<div>
+															<p className="font-medium text-foreground">
+																{formatCurrency(period.totalGstPaid)}
+															</p>
+															<p>Total GST paid</p>
+														</div>
+													</div>
+													<div className="flex flex-wrap gap-3">
+														<Button
+															type="button"
+															onClick={() => void loadReturnSummary(period)}
+														>
+															<ReceiptTextIcon data-icon="inline-start" />
+															Open return
+														</Button>
+														<Button
+															type="button"
+															variant="outline"
+															onClick={() =>
+																void togglePeriodFiled(period, !period.filed)
+															}
+														>
+															<CheckCircle2Icon data-icon="inline-start" />
+															{period.filed ? "Unmark filed" : "Mark filed"}
+														</Button>
+													</div>
+												</div>
+											))}
+										</div>
+									) : null}
+								</div>
+							) : null}
 						</CardContent>
 					</Card>
 
