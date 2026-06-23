@@ -160,10 +160,12 @@ function getPeriodActionLabel(period: GstPeriodSummary): string {
 
 function GstPeriodCard({
 	period,
+	onFilterExpenses,
 	onOpenReturn,
 	onToggleFiled,
 }: {
 	period: GstPeriodSummary;
+	onFilterExpenses: (period: GstPeriodSummary) => void;
 	onOpenReturn: (period: GstPeriodSummary) => void;
 	onToggleFiled: (period: GstPeriodSummary) => void;
 }) {
@@ -222,6 +224,13 @@ function GstPeriodCard({
 				</div>
 			</div>
 			<div className="flex flex-wrap gap-3">
+				<Button
+					type="button"
+					variant="outline"
+					onClick={() => onFilterExpenses(period)}
+				>
+					Filter expenses
+				</Button>
 				<Button type="button" onClick={() => onOpenReturn(period)}>
 					<ReceiptTextIcon data-icon="inline-start" />
 					Open return
@@ -337,6 +346,7 @@ function ReturnValueRow({
 
 export function App() {
 	const uploadInputRef = useRef<HTMLInputElement | null>(null);
+	const expensesSectionRef = useRef<HTMLElement | null>(null);
 	const [expenses, setExpenses] = useState<Expense[]>([]);
 	const [periods, setPeriods] = useState<GstPeriodSummary[]>([]);
 	const [error, setError] = useState<string | null>(null);
@@ -346,6 +356,8 @@ export function App() {
 	const [refreshing, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 	const [expenseSearch, setExpenseSearch] = useState("");
+	const [expenseDateFrom, setExpenseDateFrom] = useState("");
+	const [expenseDateTo, setExpenseDateTo] = useState("");
 	const [historyOpen, setHistoryOpen] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -388,12 +400,19 @@ export function App() {
 	}, []);
 
 	const normalizedExpenseSearch = deferredExpenseSearch.trim().toLowerCase();
-	const filteredExpenses =
-		normalizedExpenseSearch.length === 0
-			? expenses
-			: expenses.filter((expense) =>
-					expense.title.toLowerCase().includes(normalizedExpenseSearch),
-				);
+	const filteredExpenses = expenses.filter((expense) => {
+		const matchesSearch =
+			normalizedExpenseSearch.length === 0 ||
+			expense.title.toLowerCase().includes(normalizedExpenseSearch);
+		const matchesDateFrom =
+			expenseDateFrom.length === 0 ||
+			(expense.expenseDate != null && expense.expenseDate >= expenseDateFrom);
+		const matchesDateTo =
+			expenseDateTo.length === 0 ||
+			(expense.expenseDate != null && expense.expenseDate <= expenseDateTo);
+
+		return matchesSearch && matchesDateFrom && matchesDateTo;
+	});
 
 	const sortedExpenses = [...filteredExpenses].sort((left, right) => {
 		const leftValue = getExpenseSortValue(left);
@@ -429,6 +448,21 @@ export function App() {
 		startRefreshTransition(() => {
 			void loadDashboard();
 		});
+	}
+
+	function applyExpenseDateFilter(dateFrom: string, dateTo: string) {
+		setExpenseDateFrom(dateFrom);
+		setExpenseDateTo(dateTo);
+		expensesSectionRef.current?.scrollIntoView({
+			behavior: "smooth",
+			block: "start",
+		});
+	}
+
+	function clearExpenseFilters() {
+		setExpenseSearch("");
+		setExpenseDateFrom("");
+		setExpenseDateTo("");
 	}
 
 	function updatePeriod(period: GstPeriodSummary, filed: boolean) {
@@ -706,6 +740,12 @@ export function App() {
 									<GstPeriodCard
 										key={`${period.periodStart}-${period.periodEnd}`}
 										period={period}
+										onFilterExpenses={(selectedPeriod) =>
+											applyExpenseDateFilter(
+												selectedPeriod.periodStart,
+												selectedPeriod.periodEnd,
+											)
+										}
 										onOpenReturn={(selectedPeriod) =>
 											void loadReturnSummary(selectedPeriod)
 										}
@@ -743,6 +783,12 @@ export function App() {
 												<GstPeriodCard
 													key={`${period.periodStart}-${period.periodEnd}`}
 													period={period}
+													onFilterExpenses={(selectedPeriod) =>
+														applyExpenseDateFilter(
+															selectedPeriod.periodStart,
+															selectedPeriod.periodEnd,
+														)
+													}
 													onOpenReturn={(selectedPeriod) =>
 														void loadReturnSummary(selectedPeriod)
 													}
@@ -843,9 +889,9 @@ export function App() {
 					</Card>
 				</section>
 
-				<section>
+				<section ref={expensesSectionRef}>
 					<Card className="border-white/60 bg-white/88 shadow-sm backdrop-blur">
-						<CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+						<CardHeader className="flex flex-col gap-4">
 							<div className="flex flex-col gap-1">
 								<CardTitle>Expenses</CardTitle>
 								<CardDescription>
@@ -862,6 +908,20 @@ export function App() {
 									className="w-full sm:w-[220px]"
 									aria-label="Search expenses by title"
 								/>
+								<Input
+									type="date"
+									value={expenseDateFrom}
+									onChange={(event) => setExpenseDateFrom(event.target.value)}
+									className="w-full sm:w-[170px]"
+									aria-label="Filter expenses from date"
+								/>
+								<Input
+									type="date"
+									value={expenseDateTo}
+									onChange={(event) => setExpenseDateTo(event.target.value)}
+									className="w-full sm:w-[170px]"
+									aria-label="Filter expenses to date"
+								/>
 								<Select
 									value={sortOrder}
 									onValueChange={(value) => setSortOrder(value as SortOrder)}
@@ -876,6 +936,13 @@ export function App() {
 										</SelectGroup>
 									</SelectContent>
 								</Select>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={clearExpenseFilters}
+								>
+									Clear filters
+								</Button>
 							</div>
 						</CardHeader>
 						<CardContent>
@@ -917,7 +984,7 @@ export function App() {
 												colSpan={8}
 												className="py-10 text-center text-muted-foreground"
 											>
-												No expenses match that title search.
+												No expenses match the active filters.
 											</TableCell>
 										</TableRow>
 									) : (
