@@ -8,7 +8,6 @@ import {
 	FolderOpenIcon,
 	PlusIcon,
 	ReceiptTextIcon,
-	RefreshCwIcon,
 	Trash2Icon,
 } from "lucide-react";
 import {
@@ -353,7 +352,7 @@ export function App() {
 	const [loading, setLoading] = useState(true);
 	const [uploading, setUploading] = useState(false);
 	const [saving, setSaving] = useState(false);
-	const [refreshing, startRefreshTransition] = useTransition();
+	const [, startRefreshTransition] = useTransition();
 	const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 	const [expenseSearch, setExpenseSearch] = useState("");
 	const [expenseDateFrom, setExpenseDateFrom] = useState("");
@@ -713,17 +712,6 @@ export function App() {
 								<CardDescription>
 									Current GST work, with older periods available in history.
 								</CardDescription>
-							</div>
-							<div className="flex flex-wrap gap-3">
-								<Button
-									type="button"
-									variant="outline"
-									onClick={refreshDashboard}
-									disabled={refreshing}
-								>
-									<RefreshCwIcon data-icon="inline-start" />
-									Refresh
-								</Button>
 							</div>
 						</CardHeader>
 						<CardContent className="grid gap-4">
