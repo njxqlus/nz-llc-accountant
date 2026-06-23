@@ -799,6 +799,10 @@ function normalizeGstSettingsInput(payload: unknown): GstSettingsInput {
 		);
 	}
 
+	if (registrationStartDate > getTodayInTimezone()) {
+		throw new HttpError(400, "Registration start date cannot be after today.");
+	}
+
 	if (
 		typeof filingFrequency !== "string" ||
 		!GST_FILING_FREQUENCIES.includes(filingFrequency as GstFilingFrequency)

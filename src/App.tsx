@@ -66,7 +66,12 @@ import type {
 	SaveGstSettingsResponse,
 	UploadExpensesResponse,
 } from "@/lib/shared";
-import { calculateGstAmount, normalizeIsoDate, roundMoney } from "@/lib/shared";
+import {
+	calculateGstAmount,
+	getTodayInTimezone,
+	normalizeIsoDate,
+	roundMoney,
+} from "@/lib/shared";
 import { cn } from "@/lib/utils";
 import "./index.css";
 
@@ -173,6 +178,10 @@ function settingsRequireFilingPeriod(
 	filingFrequency: GstFilingFrequency,
 ): boolean {
 	return filingFrequency !== "MONTHLY";
+}
+
+function isFutureRegistrationStartDate(value: string): boolean {
+	return value.length > 0 && value > getTodayInTimezone();
 }
 
 function normalizeSettingsPayload(
@@ -519,8 +528,12 @@ export function App() {
 	);
 	const settingsConfigured = gstSettings != null;
 	const settingsDirty = haveSettingsChanged(gstSettings, gstSettingsForm);
+	const registrationStartDateInFuture = isFutureRegistrationStartDate(
+		gstSettingsForm.registrationStartDate,
+	);
 	const settingsCanSave =
 		gstSettingsForm.registrationStartDate.length > 0 &&
+		!registrationStartDateInFuture &&
 		(!settingsRequireFilingPeriod(gstSettingsForm.filingFrequency) ||
 			gstSettingsForm.filingPeriod.length > 0);
 
@@ -577,7 +590,11 @@ export function App() {
 
 	async function saveGstSettings() {
 		if (!settingsCanSave) {
-			toast.error("Complete the GST settings before saving.");
+			toast.error(
+				registrationStartDateInFuture
+					? "Registration start date cannot be after today."
+					: "Complete the GST settings before saving.",
+			);
 			return;
 		}
 
@@ -983,6 +1000,7 @@ export function App() {
 										<Input
 											id="gst-registration-start-date"
 											type="date"
+											max={getTodayInTimezone()}
 											value={gstSettingsForm.registrationStartDate}
 											onChange={(event) =>
 												setGstSettingsForm((current) => ({
@@ -1124,6 +1142,7 @@ export function App() {
 													<Input
 														id="gst-registration-start-date"
 														type="date"
+														max={getTodayInTimezone()}
 														value={gstSettingsForm.registrationStartDate}
 														onChange={(event) =>
 															setGstSettingsForm((current) => ({
