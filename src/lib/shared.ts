@@ -85,6 +85,7 @@ export type GstPeriodSummary = {
 	netGstSalesAndIncome: number;
 	totalPurchasesAndExpenses: number;
 	totalGstPaid: number;
+	totalGstOnlyExpenses: number;
 	totalGstRefund: number;
 };
 
@@ -320,6 +321,12 @@ export function buildGstReturnSummary(
 	const totalGstPaid = roundMoney(
 		publishedExpenses.reduce((sum, expense) => sum + expense.gstAmount, 0),
 	);
+	const totalGstOnlyExpenses = roundMoney(
+		publishedExpenses.reduce(
+			(sum, expense) => sum + (expense.gstEnabled ? (expense.amount ?? 0) : 0),
+			0,
+		),
+	);
 	const dueDate = getGstDueDate(periodEnd);
 	const daysLeft = differenceInDays(dueDate, today);
 
@@ -340,6 +347,7 @@ export function buildGstReturnSummary(
 		netGstSalesAndIncome: 0,
 		totalPurchasesAndExpenses,
 		totalGstPaid,
+		totalGstOnlyExpenses,
 		totalGstRefund: roundMoney(0 - totalGstPaid),
 	};
 }

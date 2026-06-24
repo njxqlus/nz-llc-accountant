@@ -70,7 +70,6 @@ import {
 	calculateGstAmount,
 	getTodayInTimezone,
 	normalizeIsoDate,
-	roundMoney,
 } from "@/lib/shared";
 import { cn } from "@/lib/utils";
 import "./index.css";
@@ -426,7 +425,7 @@ function ReturnValueRow({
 }: {
 	label: string;
 	value: number;
-	onCopy: () => Promise<void>;
+	onCopy?: () => Promise<void>;
 }) {
 	return (
 		<div className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
@@ -436,15 +435,17 @@ function ReturnValueRow({
 					{formatCurrency(value)}
 				</p>
 			</div>
-			<Button
-				type="button"
-				variant="outline"
-				size="sm"
-				onClick={() => void onCopy()}
-			>
-				<CopyIcon data-icon="inline-start" />
-				Copy
-			</Button>
+			{onCopy ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => void onCopy()}
+				>
+					<CopyIcon data-icon="inline-start" />
+					Copy
+				</Button>
+			) : null}
 		</div>
 	);
 }
@@ -1791,22 +1792,10 @@ export function App() {
 									<ReturnValueRow
 										label="Total sales and income"
 										value={returnSummary.totalSalesAndIncome}
-										onCopy={() =>
-											copyValue(
-												"Total sales and income",
-												String(returnSummary.totalSalesAndIncome.toFixed(2)),
-											)
-										}
 									/>
 									<ReturnValueRow
 										label="Net GST sales and income"
 										value={returnSummary.netGstSalesAndIncome}
-										onCopy={() =>
-											copyValue(
-												"Net GST sales and income",
-												String(returnSummary.netGstSalesAndIncome.toFixed(2)),
-											)
-										}
 									/>
 								</div>
 							</div>
@@ -1828,24 +1817,16 @@ export function App() {
 									<ReturnValueRow
 										label="Total purchases and expenses"
 										value={returnSummary.totalPurchasesAndExpenses}
-										onCopy={() =>
-											copyValue(
-												"Total purchases and expenses",
-												String(
-													returnSummary.totalPurchasesAndExpenses.toFixed(2),
-												),
-											)
-										}
 									/>
 								</div>
 							</div>
 							<ReturnValueRow
-								label="Total GST refund"
-								value={roundMoney(returnSummary.totalGstRefund)}
+								label="GST-only expenses"
+								value={returnSummary.totalGstOnlyExpenses}
 								onCopy={() =>
 									copyValue(
-										"Total GST refund",
-										String(returnSummary.totalGstRefund.toFixed(2)),
+										"GST-only expenses",
+										String(returnSummary.totalGstOnlyExpenses.toFixed(2)),
 									)
 								}
 							/>
