@@ -1807,12 +1807,6 @@ export function App() {
 									<ReturnValueRow
 										label="Total GST paid"
 										value={returnSummary.totalGstPaid}
-										onCopy={() =>
-											copyValue(
-												"Total GST paid",
-												String(returnSummary.totalGstPaid.toFixed(2)),
-											)
-										}
 									/>
 									<ReturnValueRow
 										label="Total purchases and expenses"
