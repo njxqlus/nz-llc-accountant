@@ -23,6 +23,18 @@ for var_name in "${required_vars[@]}"; do
   fi
 done
 
+backup_set="${RESTIC_BACKUP_SET-nz-llc-accountant}"
+keep_last="${RESTIC_KEEP_LAST-1}"
+if [[ ! "$backup_set" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "RESTIC_BACKUP_SET must be a non-empty identifier using letters, digits, dots, underscores or hyphens." >&2
+  exit 1
+fi
+if [[ ! "$keep_last" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RESTIC_KEEP_LAST must be a positive integer." >&2
+  exit 1
+fi
+backup_tag="backup-set:${backup_set}"
+
 export PGPASSWORD="$POSTGRES_PASSWORD"
 export RESTIC_REPOSITORY="s3:${BACKUP_S3_ENDPOINT}/${BACKUP_S3_BUCKET}/${BACKUP_S3_PREFIX:-nz-llc-accountant}"
 
@@ -69,8 +81,10 @@ media_bucket=${DAM_S3_BUCKET}
 media_prefix=${DAM_S3_PREFIX:-}
 EOF
 
-restic backup "$snapshot_root" --tag daily
-restic forget --keep-last "${RESTIC_KEEP_LAST:-1}" --prune
+restic backup "$snapshot_root" --tag daily --tag "$backup_tag"
+# Paths contain timestamps and container hostnames can change between runs.
+# Only this explicitly named set participates; legacy daily-only snapshots stay intact.
+restic forget --tag "$backup_tag" --group-by '' --keep-last "$keep_last" --prune
 
 printf '%s\n' "$timestamp" > /var/lib/backup/last-success.txt
 rm -rf "$workspace"
